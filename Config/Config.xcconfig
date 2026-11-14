@@ -1,0 +1,13 @@
+// ─────────────────────────────────────────────────────────────
+//  EDIT THESE BEFORE YOUR FIRST BUILD
+// ─────────────────────────────────────────────────────────────
+
+// 1. Make this unique to you (reverse-DNS style, letters/dots only), e.g. com.pooja
+BUNDLE_ID_PREFIX = com.example.yourname
+
+// 2. Your Apple Team ID (Xcode › Settings › Accounts › your Apple ID › Team).
+//    You can also leave it empty and pick the team in Signing & Capabilities for both targets.
+DEVELOPMENT_TEAM =
+
+// Derived — no need to change.
+APP_GROUP_ID = group.$(BUNDLE_ID_PREFIX).audiobooks
