@@ -1,48 +1,72 @@
 import SwiftUI
 
 struct PlayerView: View {
+    /// Coordinate space of the now-playing panel; the artwork placeholder reports its frame in it.
+    static let panelSpace = "nowPlayingPanel"
+
+    /// The vertical gaps in the open player, in points. Tune the spacing here.
+    /// (The chapter row is 44 points tall and the scrubber 34, for easy tapping, so each already
+    /// carries about 11–14 points of space around what you see.)
+    enum Gap {
+        /// Chapter name → progress bar.
+        static let chapterToProgress: CGFloat = 0
+        /// Progress bar times → play controls.
+        static let progressToControls: CGFloat = Spacing.l
+        /// Play controls → the option chips.
+        static let controlsToOptions: CGFloat = Spacing.m
+    }
+
+    /// Collapse back to the mini bar (the chevron).
+    var onCollapse: () -> Void = {}
+    /// Where the artwork should sit; the panel draws the travelling artwork there.
+    var onArtworkFrame: (CGRect) -> Void = { _ in }
+    /// Where the title block sits; the panel draws the travelling title there mid-drag.
+    var onTitleFrame: (CGRect) -> Void = { _ in }
+    /// Hidden while the panel's travelling title stands in for it (mid-drag).
+    var hideTitle = false
+    /// False while the panel is closed or moving: long titles hold still instead of scrolling.
+    var isActive = true
+
     @EnvironmentObject private var player: PlayerController
     @EnvironmentObject private var settings: AppSettings
-    @Environment(\.dismiss) private var dismiss
 
     @State private var scrubValue: Double?
     @State private var activeSheet: PlayerSheet?
-    @State private var showBookmarkPrompt = false
-    @State private var bookmarkNote = ""
-    @State private var bookmarkTime: Double = 0
+    /// The bookmark just saved, for the "Bookmark Saved" sheet.
+    @State private var savedBookmark: Bookmark?
+    @State private var bookmarkSaved = 0
+    /// Right-hand time under the progress bar: time left in the chapter, or (tapped) in the book.
+    @AppStorage("progressShowsBookRemaining") private var showBookRemaining = false
 
     enum PlayerSheet: String, Identifiable {
-        case chapters, bookmarks, speed, settings
+        case chapters, bookmarks, speed, more, bookmarkSaved, settings, editDetails
         var id: String { rawValue }
+    }
+
+    /// The current cover's colours (background, buttons, chips, sheets).
+    private var theme: CoverTheme {
+        player.book.map { CoverPalette.theme(for: $0) } ?? .fallback
     }
 
     var body: some View {
         Group {
             if let book = player.book {
+                // The panel draws the background and the artwork.
                 content(book)
             } else {
                 ContentUnavailableView("Nothing playing", systemImage: "headphones")
+                    .background { PrismBackground(style: .plain) }
             }
         }
+        .environment(\.coverTheme, theme)
         .sheet(item: $activeSheet) { sheet in
-            Group {
-                switch sheet {
-                case .chapters: ChaptersView()
-                case .bookmarks: BookmarksView()
-                case .speed: SpeedView().presentationDetents([.height(340)])
-                case .settings: SettingsView()
-                }
-            }
-            .environmentObject(player)
-            .environmentObject(settings)
-            .tint(.orange)
-        }
-        .alert("Add Bookmark", isPresented: $showBookmarkPrompt) {
-            TextField("Note (optional)", text: $bookmarkNote)
-            Button("Save") { player.addBookmark(at: bookmarkTime, note: bookmarkNote) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("At \(TimeFormat.clock(bookmarkTime))")
+            sheetContent(sheet)
+                .environmentObject(player)
+                .environmentObject(settings)
+                .environment(\.coverTheme, theme)
+                .tint(theme.accent)
+                .presentationBackground(theme.sheet)
+                .presentationCornerRadius(28)
         }
         .alert("Playback problem", isPresented: Binding(
             get: { player.errorMessage != nil },
@@ -51,104 +75,128 @@ struct PlayerView: View {
         } message: {
             Text(player.errorMessage ?? "")
         }
+        .sensoryFeedback(.success, trigger: bookmarkSaved)
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ sheet: PlayerSheet) -> some View {
+        switch sheet {
+        case .chapters: ChaptersView()
+        case .bookmarks: BookmarksView()
+        case .settings: SettingsView(scrollTo: SettingsView.playbackSection)
+        case .editDetails:
+            if let book = player.book {
+                BookDetailsView(book: book)
+            }
+        // These size themselves to fit (PlayerSheetScaffold).
+        case .speed:
+            SpeedSheet { activeSheet = .settings }
+                .presentationDragIndicator(.visible)
+        case .more:
+            MoreSheet { activeSheet = $0 }
+                .presentationDragIndicator(.visible)
+        case .bookmarkSaved:
+            if let bookmark = savedBookmark {
+                BookmarkSavedSheet(bookmark: bookmark) { activeSheet = .bookmarks }
+                    .presentationDragIndicator(.visible)
+            }
+        }
     }
 
     // MARK: - Layout
 
+    /// Laid out like YouTube Music, on the 4-point scale (`Spacing`): a big cover with 16-point
+    /// margins and small corners, then the title and author left-aligned under it, then the
+    /// chapter, progress, controls and options. Buttons are at least 44 points.
     private func content(_ book: Book) -> some View {
         VStack(spacing: 0) {
-            topBar
-            Spacer(minLength: 8)
-
-            CoverView(book: book, cornerRadius: 14)
-                .frame(maxWidth: 300)
-                .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
-                .padding(.horizontal, 32)
-
-            Spacer(minLength: 12)
-
-            VStack(spacing: 4) {
-                Text(book.title)
-                    .font(.title3.weight(.bold))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                Text(book.author)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                chapterButton
+            HStack {
+                ChipIconButton(systemName: "chevron.down", label: "Close player", action: onCollapse)
+                Spacer()
             }
-            .padding(.horizontal)
+            // 12 + (44 − 36) / 2 = 16: the round button lines up with the cover's edge.
+            .padding(.horizontal, Spacing.s)
+            .padding(.top, Spacing.xs)
+
+            // The artwork's spot: as big as the screen allows (full width less the margins),
+            // shrinking only when the screen is too short for everything else.
+            // The panel draws the cover here (it travels in from the mini bar).
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                // Measure the square itself (before it's placed in the flexible space).
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .named(Self.panelSpace))
+                } action: { frame in
+                    onArtworkFrame(frame)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, Spacing.m)
+                .padding(.top, Spacing.s)
+                .padding(.bottom, Spacing.l)
+                .layoutPriority(-1)
+
+            // Title and author, left-aligned under the cover. A title too long to fit scrolls
+            // slowly so it can be read. Mid-drag the panel's travelling title stands in for them.
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                MarqueeText(text: book.title, font: .title2.bold(), isActive: isActive)
+                FadedLineText(text: book.author, font: .body)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Measured inside the margins, so the travelling title lands exactly here.
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named(Self.panelSpace))
+            } action: { frame in
+                onTitleFrame(frame)
+            }
+            .opacity(hideTitle ? 0 : 1)
+            .padding(.horizontal, Spacing.m)
+
+            chapterButton
+                .padding(.horizontal, Spacing.m)
+                .padding(.top, Spacing.xs)
 
             progressSection
-                .padding(.horizontal, 24)
-                .padding(.top, 14)
+                .padding(.horizontal, Spacing.m)
+                .padding(.top, Gap.chapterToProgress)
 
             transportControls
-                .padding(.top, 10)
+                .padding(.top, Gap.progressToControls)
 
-            volumeRow
-                .padding(.horizontal, 28)
-                .padding(.top, 14)
-
-            bottomBar
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+            playerOptions
+                .padding(.horizontal, Spacing.m)
+                .padding(.top, Gap.controlsToOptions)
+                .padding(.bottom, Spacing.s)
         }
-    }
-
-    private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.down")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44)
-            }
-            Spacer()
-            Text("Now Playing")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button { activeSheet = .settings } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-            }
-        }
-        .padding(.horizontal, 8)
-        .foregroundStyle(.primary)
     }
 
     @ViewBuilder
     private var chapterButton: some View {
-        if player.chapters.count > 1, let chapter = player.currentChapter {
+        if let chapter = player.currentChapter {
             Button { activeSheet = .chapters } label: {
-                HStack(spacing: 4) {
-                    Text("\(player.currentChapterIndex + 1)/\(player.chapters.count)")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                    Text(chapter.title)
-                        .lineLimit(1)
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "list.bullet")
+                        .font(.body)
+                    // Long chapter names scroll slowly so they can be read.
+                    MarqueeText(text: chapter.title, font: .subheadline.weight(.semibold), isActive: isActive)
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.tertiary)
                 }
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.thinMaterial, in: Capsule())
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.top, 6)
+            .accessibilityLabel("Chapters, current chapter: \(chapter.title)")
         }
     }
 
     // MARK: - Progress
 
-    private var useChapter: Bool { settings.useChapterContext && player.chapters.count > 1 }
-    private var scopeStart: Double { useChapter ? (player.currentChapter?.start ?? 0) : 0 }
+    private var scopeStart: Double { player.currentChapter?.start ?? 0 }
     private var scopeDuration: Double {
-        max(0.1, useChapter ? (player.currentChapter?.duration ?? player.duration) : player.duration)
+        max(0.1, player.currentChapter?.duration ?? player.duration)
     }
     private var displayedElapsed: Double {
         min(scopeDuration, max(0, scrubValue ?? (player.currentTime - scopeStart)))
@@ -156,10 +204,11 @@ struct PlayerView: View {
     private var speedFactor: Double { settings.adjustForSpeed ? player.speed : 1 }
 
     private var progressSection: some View {
-        VStack(spacing: 4) {
-            Slider(
+        VStack(spacing: Spacing.xxs) {
+            PearlSlider(
                 value: Binding(get: { displayedElapsed }, set: { scrubValue = $0 }),
-                in: 0...scopeDuration,
+                range: 0...scopeDuration,
+                tint: theme.accent,
                 onEditingChanged: { editing in
                     if !editing, let value = scrubValue {
                         player.seek(to: scopeStart + value)
@@ -167,185 +216,146 @@ struct PlayerView: View {
                     }
                 })
 
-            HStack {
+            HStack(spacing: Spacing.xs) {
                 Text(TimeFormat.clock(displayedElapsed))
-                Spacer()
-                if player.speed != 1 {
-                    Text(TimeFormat.speed(player.speed))
-                        .foregroundStyle(.tint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Time left in the chapter; tap to switch to time left in the book.
+                Button {
+                    showBookRemaining.toggle()
+                } label: {
+                    Text(remainingLabel)
+                        .contentTransition(.numericText())
                 }
-                Spacer()
-                Text(rightLabel)
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+                .accessibilityHint("Switches between time left in the chapter and in the book")
+
+                Text("-" + TimeFormat.clock(chapterRemaining))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
-
-            if settings.showTotalRemaining {
-                Text(totalRemainingLine)
-                    .font(.footnote.weight(.medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
-            }
         }
     }
 
-    private var rightLabel: String {
-        if settings.useRemainingTime {
-            return "-" + TimeFormat.clock((scopeDuration - displayedElapsed) / speedFactor)
+    private var remainingLabel: String {
+        let now = scrubValue.map { scopeStart + $0 } ?? player.currentTime
+        if !showBookRemaining, let chapter = player.currentChapter {
+            return preciseDuration(max(0, chapter.end - now) / speedFactor) + " left"
         }
-        return TimeFormat.clock(scopeDuration)
+        return preciseDuration(max(0, player.duration - now) / speedFactor) + " left in book"
     }
 
-    private var totalRemainingLine: String {
-        let elapsedInBook = scrubValue.map { scopeStart + $0 } ?? player.currentTime
-        let remaining = max(0, player.duration - elapsedInBook) / speedFactor
-        var line = "\(TimeFormat.short(remaining)) left in book"
-        if settings.adjustForSpeed && player.speed != 1 { line += " at \(TimeFormat.speed(player.speed))" }
-        return line
+    private var chapterRemaining: Double {
+        let now = scrubValue.map { scopeStart + $0 } ?? player.currentTime
+        return max(0, (player.currentChapter?.end ?? player.duration) - now) / speedFactor
+    }
+
+    private func preciseDuration(_ seconds: Double) -> String {
+        let total = Int(max(0, seconds).rounded(.down))
+        let hours = total / 3_600
+        let minutes = (total % 3_600) / 60
+        let remainingSeconds = total % 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m \(remainingSeconds)s" }
+        return "\(remainingSeconds)s"
     }
 
     // MARK: - Controls
 
     private var transportControls: some View {
         HStack(spacing: 0) {
-            controlButton("backward.end.fill", size: 22, label: "Previous chapter") { player.previousChapter() }
-            controlButton(SkipIcon.name(back: true, seconds: settings.skipBackInterval), size: 30,
-                          label: "Skip back \(Int(settings.skipBackInterval)) seconds") { player.skipBackward() }
+            controlButton("backward.end.fill", size: 21, label: "Previous chapter") { player.previousChapter() }
+            skipButton(back: true, seconds: settings.skipBackInterval) { player.skipBackward() }
 
-            Button { player.togglePlayPause() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 76, height: 76)
-                    .background(Circle().fill(Color.orange))
-                    .contentTransition(.symbolEffect(.replace))
+            BadgePlayButton(isPlaying: player.isPlaying, size: 64, color: theme.accent) {
+                player.togglePlayPause()
             }
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
             .frame(maxWidth: .infinity)
 
-            controlButton(SkipIcon.name(back: false, seconds: settings.skipForwardInterval), size: 30,
-                          label: "Skip forward \(Int(settings.skipForwardInterval)) seconds") { player.skipForward() }
-            controlButton("forward.end.fill", size: 22, label: "Next chapter") { player.nextChapter() }
+            skipButton(back: false, seconds: settings.skipForwardInterval) { player.skipForward() }
+            controlButton("forward.end.fill", size: 21, label: "Next chapter") { player.nextChapter() }
+        }
+        .padding(.horizontal, Spacing.s)
+    }
+
+    /// A thin, roomy skip circle; the number stays small.
+    private func skipButton(back: Bool, seconds: Double, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            SkipGlyph(back: back, seconds: seconds, size: 30, numberSize: 10)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 12)
+        .accessibilityLabel("Skip \(back ? "back" : "forward") \(Int(seconds)) seconds")
     }
 
     private func controlButton(_ symbol: String, size: CGFloat, label: String,
                                action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size, weight: .medium))
+                .font(.system(size: size, weight: .regular))
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: 56)
                 .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
 
-    private var volumeRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "speaker.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            SystemVolumeSlider()
-                .frame(height: 30)
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    // MARK: - Option chips
+
+    private var playerOptions: some View {
+        // Fixed-width chips, grouped in the middle rather than stretched edge to edge.
+        HStack(spacing: Spacing.s) {
+            optionButton(accessibilityLabel: "Playback speed, \(TimeFormat.speed(player.speed))") {
+                Text(TimeFormat.speed(player.speed))
+                    .font(.subheadline.weight(.bold).monospacedDigit())
+            } action: {
+                activeSheet = .speed
+            }
+
+            optionButton(accessibilityLabel: "Add bookmark") {
+                Image(systemName: "bookmark.fill")
+            } action: {
+                savedBookmark = player.addBookmark()
+                bookmarkSaved += 1
+                if savedBookmark != nil { activeSheet = .bookmarkSaved }
+            }
+
+            optionButton(accessibilityLabel: "Open chapters") {
+                Image(systemName: "list.bullet")
+            } action: {
+                activeSheet = .chapters
+            }
+
+            optionButton(accessibilityLabel: "More player options") {
+                Image(systemName: "ellipsis")
+            } action: {
+                activeSheet = .more
+            }
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private var bottomBar: some View {
-        HStack {
-            Button { activeSheet = .speed } label: {
-                Text(TimeFormat.speed(player.speed))
-                    .font(.headline.monospacedDigit())
-                    .frame(minWidth: 56, minHeight: 44)
-            }
-            .accessibilityLabel("Playback speed")
-            Spacer()
-            Button {
-                bookmarkTime = player.currentTime
-                bookmarkNote = ""
-                showBookmarkPrompt = true
-            } label: {
-                Image(systemName: "bookmark")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-            }
-            .accessibilityLabel("Add bookmark")
-            Spacer()
-            Button { activeSheet = .chapters } label: {
-                Image(systemName: "list.bullet")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-            }
-            .accessibilityLabel("Table of contents")
-            Spacer()
-            Button { activeSheet = .bookmarks } label: {
-                Image(systemName: "bookmark.square")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-            }
-            .accessibilityLabel("Bookmarks")
-            Spacer()
-            RoutePickerButton()
-                .frame(width: 44, height: 44)
-                .accessibilityLabel("Audio output")
+    /// A solid chip, 64 × 36 points to look light, with a 64 × 44-point tap area.
+    private func optionButton<Content: View>(
+        accessibilityLabel: String,
+        @ViewBuilder content: () -> Content,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            content()
+                .font(.body.weight(.semibold))
+                .foregroundStyle(theme.onChip)
+                .frame(width: 64, height: 36)
+                .background(theme.chip, in: Capsule())
+                .frame(height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Speed
-
-struct SpeedView: View {
-    @EnvironmentObject private var player: PlayerController
-    @EnvironmentObject private var settings: AppSettings
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Text("Playback Speed")
-                .font(.headline)
-                .padding(.top, 20)
-
-            Text(TimeFormat.speed(player.speed))
-                .font(.system(size: 44, weight: .bold).monospacedDigit())
-
-            HStack {
-                Button { player.setSpeed(player.speed - 0.05) } label: { Image(systemName: "minus.circle.fill") }
-                Slider(value: Binding(get: { player.speed }, set: { player.setSpeed($0) }),
-                       in: 0.5...3.0, step: 0.05)
-                Button { player.setSpeed(player.speed + 0.05) } label: { Image(systemName: "plus.circle.fill") }
-            }
-            .font(.title2)
-            .padding(.horizontal)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(AppSettings.speedPresets, id: \.self) { preset in
-                        Button { player.setSpeed(preset) } label: {
-                            Text(TimeFormat.speed(preset))
-                                .font(.subheadline.weight(.semibold).monospacedDigit())
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(abs(player.speed - preset) < 0.001 ? Color.orange : Color(.secondarySystemBackground),
-                                            in: Capsule())
-                                .foregroundStyle(abs(player.speed - preset) < 0.001 ? Color.white : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal)
-            }
-
-            Button("Use \(TimeFormat.speed(player.speed)) as default for new books") {
-                settings.defaultSpeed = player.speed
-            }
-            .font(.footnote)
-            .disabled(abs(settings.defaultSpeed - player.speed) < 0.001)
-
-            Spacer(minLength: 0)
-        }
+        .accessibilityLabel(accessibilityLabel)
     }
 }

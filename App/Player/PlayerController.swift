@@ -73,7 +73,9 @@ final class PlayerController: ObservableObject {
             return
         }
         if book != nil {
-            if isPlaying { pause() } else { savePosition() }
+            // Only a book that was playing counts as just played; opening another book
+            // mustn't move this one to the top of the library.
+            if isPlaying { pause() } else { savePosition(markPlayed: false) }
         }
 
         let fresh = library.book(id: newBook.id) ?? newBook
@@ -127,8 +129,16 @@ final class PlayerController: ObservableObject {
         playing ? play() : pause()
     }
 
+    // TEMP DEBUG: trace playback state while investigating "play after relaunch" bug.
+    private func trace(_ event: String) {
+        let item = player.currentItem
+        let pending = pendingSeek.map { String(format: "%.1f", $0) } ?? "nil"
+        print("[PlayerDebug] \(event) | isPlaying=\(isPlaying) rate=\(player.rate) tcs=\(player.timeControlStatus.rawValue) wait=\(player.reasonForWaitingToPlay?.rawValue ?? "-") item=\(item.map { String($0.status.rawValue) } ?? "nil") pending=\(pending) active=\(activeSeeks) t=\(String(format: "%.1f", currentTime)) track=\(trackIndex) itemTime=\(String(format: "%.1f", item?.currentTime().seconds ?? -1)) err=\(item?.error?.localizedDescription ?? "-") otherAudio=\(AVAudioSession.sharedInstance().isOtherAudioPlaying)")
+    }
+
     func play() {
         guard var current = book else { return }
+        trace("play() begin pausedAt=\(pausedAt.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "nil")")
         activateAudioSession()
 
         if current.isFinished || currentTime >= current.duration - 1 {
@@ -145,13 +155,20 @@ final class PlayerController: ObservableObject {
 
         pausedAt = nil
         isPlaying = true
+        // Playing a book puts it first in the library straight away.
+        current = book ?? current
+        current.lastPlayed = Date()
+        book = current
+        library.update(current)
         player.defaultRate = Float(speed)
         startPlayerIfReady()
         updateNowPlaying()
         updateWidget(reload: true)
+        trace("play() end")
     }
 
     func pause() {
+        trace("pause()")
         player.pause()
         guard isPlaying else { return }
         isPlaying = false
@@ -190,7 +207,7 @@ final class PlayerController: ObservableObject {
     }
 
     func setSpeed(_ newSpeed: Double) {
-        let clamped = min(3.0, max(0.5, (newSpeed * 100).rounded() / 100))
+        let clamped = min(4.0, max(0.5, (newSpeed * 100).rounded() / 100))
         speed = clamped
         player.defaultRate = Float(clamped)
         if isPlaying { player.rate = Float(clamped) }
@@ -208,6 +225,7 @@ final class PlayerController: ObservableObject {
         let target = min(max(0, time), max(0, current.duration - 0.25))
         let location = current.location(for: target)
         currentTime = target
+        trace("seek(to: \(String(format: "%.1f", target))) track=\(location.track) local=\(String(format: "%.1f", location.local))")
 
         if location.track != trackIndex || player.currentItem == nil {
             setTrack(location.track, at: location.local)
@@ -225,15 +243,19 @@ final class PlayerController: ObservableObject {
 
     // MARK: - Bookmarks
 
-    func addBookmark(at time: Double? = nil, note: String = "") {
-        guard var current = book else { return }
+    /// Adds a bookmark and returns it (so a note can be added to it straight after).
+    @discardableResult
+    func addBookmark(at time: Double? = nil, note: String = "") -> Bookmark? {
+        guard var current = book else { return nil }
         let t = time ?? currentTime
         let chapterTitle = current.chapters.isEmpty ? "" : current.chapters[current.chapterIndex(at: t)].title
-        current.bookmarks.append(Bookmark(time: t, note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-                                          chapterTitle: chapterTitle))
+        let bookmark = Bookmark(time: t, note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+                                chapterTitle: chapterTitle)
+        current.bookmarks.append(bookmark)
         current.bookmarks.sort { $0.time < $1.time }
         book = current
         library.update(current)
+        return bookmark
     }
 
     func updateBookmark(_ id: UUID, note: String) {
@@ -248,6 +270,58 @@ final class PlayerController: ObservableObject {
         current.bookmarks.removeAll { ids.contains($0.id) }
         book = current
         library.update(current)
+    }
+
+    // MARK: - Chapters
+
+    /// Replaces the chapter list (e.g. after Find Chapters), remembering the original once.
+    func replaceChapters(_ newChapters: [Chapter], source: ChapterSource) {
+        guard var current = book, !newChapters.isEmpty else { return }
+        if current.originalChapters == nil {
+            current.originalChapters = current.chapters
+            current.originalChapterSource = current.chapterSource
+        }
+        current.chapters = newChapters
+        current.chapterSource = source
+        applyChapterChange(current)
+    }
+
+    func restoreOriginalChapters() {
+        guard var current = book, let original = current.originalChapters else { return }
+        current.chapters = original
+        current.chapterSource = current.originalChapterSource ?? ChapterSource.none
+        current.originalChapters = nil
+        current.originalChapterSource = nil
+        applyChapterChange(current)
+    }
+
+    private func applyChapterChange(_ updated: Book) {
+        book = updated
+        library.update(updated)
+        currentChapterIndex = updated.chapterIndex(at: currentTime)
+        updateNowPlaying()
+        updateWidget(reload: true)
+    }
+
+    /// Applies edited details (title, author, cover…) to the loaded book, keeping playback state.
+    func updateDetails(from edited: Book) {
+        guard let current = book, current.id == edited.id else { return }
+        let updated = current.withDetails(from: edited)
+        book = updated
+        library.update(updated)
+        loadArtwork()
+        updateNowPlaying()
+        updateWidget(reload: true)
+    }
+
+    /// Renames the loaded book's chapters (same timings), e.g. after its title was tidied.
+    func updateChapterTitles(_ chapters: [Chapter]) {
+        guard var current = book, current.chapters.count == chapters.count else { return }
+        current.chapters = chapters
+        book = current
+        library.update(current)
+        updateNowPlaying()
+        updateWidget(reload: true)
     }
 
     // MARK: - Library helpers for the loaded book
@@ -271,10 +345,11 @@ final class PlayerController: ObservableObject {
     }
 
     /// Persists the current position (called every few seconds while playing, and on pause/background).
-    func savePosition() {
+    /// `markPlayed` also updates "last played", which orders the library and drives smart rewind.
+    func savePosition(markPlayed: Bool = true) {
         guard var current = book else { return }
         current.position = currentTime
-        current.lastPlayed = Date()
+        if markPlayed { current.lastPlayed = Date() }
         book = current
         library.update(current)
         lastSave = Date()
@@ -291,6 +366,7 @@ final class PlayerController: ObservableObject {
         item.audioTimePitchAlgorithm = .timeDomain
         pendingSeek = local > 0.2 ? local : nil
         player.replaceCurrentItem(with: item)
+        trace("setTrack(\(index), at: \(String(format: "%.1f", local)))")
 
         statusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             let status = item.status
@@ -302,6 +378,7 @@ final class PlayerController: ObservableObject {
     }
 
     private func itemStatusChanged(_ item: AVPlayerItem, status: AVPlayerItem.Status, error: String?) {
+        trace("itemStatusChanged status=\(status.rawValue) isCurrent=\(item === player.currentItem) error=\(error ?? "-")")
         guard item === player.currentItem else { return }
         switch status {
         case .readyToPlay:
@@ -321,8 +398,10 @@ final class PlayerController: ObservableObject {
 
     /// Seeks to the pending target; if the user seeked again meanwhile, follows up with the newest target.
     private func applyPendingSeek(_ target: Double) {
+        trace("applyPendingSeek(\(String(format: "%.1f", target)))")
         performSeek(local: target) { [weak self] in
             guard let self else { return }
+            self.trace("applyPendingSeek completion target=\(String(format: "%.1f", target))")
             if let newer = self.pendingSeek, abs(newer - target) > 0.01 {
                 self.applyPendingSeek(newer)
             } else {
@@ -335,10 +414,11 @@ final class PlayerController: ObservableObject {
     private func performSeek(local: Double, completion: (@MainActor () -> Void)? = nil) {
         activeSeeks += 1
         let time = CMTime(seconds: local, preferredTimescale: 1000)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.activeSeeks = max(0, self.activeSeeks - 1)
+                self.trace("performSeek completion local=\(String(format: "%.1f", local)) finished=\(finished)")
                 completion?()
             }
         }
@@ -348,8 +428,12 @@ final class PlayerController: ObservableObject {
         guard isPlaying,
               let item = player.currentItem,
               item.status == .readyToPlay,
-              pendingSeek == nil else { return }
+              pendingSeek == nil else {
+            trace("startPlayerIfReady: NOT starting")
+            return
+        }
         player.playImmediately(atRate: Float(speed))
+        trace("startPlayerIfReady: playImmediately called")
     }
 
     private func addTimeObserver() {
@@ -374,7 +458,7 @@ final class PlayerController: ObservableObject {
 
         if isPlaying {
             let now = Date()
-            if now.timeIntervalSince(lastSave) > 5 { savePosition() }
+            if now.timeIntervalSince(lastSave) > 5 { savePosition(); trace("tick") }
             if now.timeIntervalSince(lastSnapshot) > 20 { updateWidget(reload: false) }
         }
     }
@@ -452,15 +536,31 @@ final class PlayerController: ObservableObject {
             .sink { [weak self] note in
                 guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                       let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
+                self?.trace("routeChange reason=\(reason.rawValue) outputs=\(AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType.rawValue))")
                 // Headphones unplugged / Bluetooth disconnected: pause instead of playing out loud.
                 if reason == .oldDeviceUnavailable { self?.pause() }
             }
+            .store(in: &cancellables)
+
+        // TEMP DEBUG
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willEnterForegroundNotification,
+                     UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification,
+                     AVAudioSession.mediaServicesWereResetNotification, AVAudioSession.mediaServicesWereLostNotification] {
+            center.publisher(for: name)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] note in self?.trace("notification \(note.name.rawValue)") }
+                .store(in: &cancellables)
+        }
+        player.publisher(for: \.timeControlStatus)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] status in self?.trace("timeControlStatus -> \(status.rawValue)") }
             .store(in: &cancellables)
     }
 
     private func handleInterruption(_ note: Notification) {
         guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        trace("interruption type=\(type.rawValue) options=\(note.userInfo?[AVAudioSessionInterruptionOptionKey] ?? "-") reason=\(note.userInfo?[AVAudioSessionInterruptionReasonKey] ?? "-")")
         switch type {
         case .began:
             wasPlayingBeforeInterruption = isPlaying

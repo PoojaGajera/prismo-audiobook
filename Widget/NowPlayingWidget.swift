@@ -79,8 +79,11 @@ struct NowPlayingWidgetView: View {
     private var background: some View {
         switch family {
         case .systemSmall, .systemMedium:
-            LinearGradient(colors: [Color(.secondarySystemBackground), Color(.systemBackground)],
-                           startPoint: .top, endPoint: .bottom)
+            ZStack {
+                PrismImage()
+                // Frost the glass so text stays readable in light and dark.
+                Theme.background.opacity(0.55)
+            }
         default:
             Color.clear
         }
@@ -88,28 +91,25 @@ struct NowPlayingWidgetView: View {
 
     // MARK: - Home Screen
 
+    /// Big cover with the play/pause button on its corner, and the title underneath.
     private var small: some View {
         Group {
             if s.hasBook {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .top) {
-                        cover(size: 52)
-                        Spacer(minLength: 0)
-                        playButton(size: 42)
+                VStack(spacing: 6) {
+                    GeometryReader { geo in
+                        let side = min(geo.size.width, geo.size.height)
+                        cover(size: side)
+                            .overlay(alignment: .bottomTrailing) {
+                                playButton(size: side * 0.34)
+                                    .padding(side * 0.04)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    Spacer(minLength: 0)
                     Text(s.bookTitle)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(2)
-                    Text(s.chapterTitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(.system(.caption).weight(.bold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                    ProgressView(value: s.scopeProgress)
-                        .tint(.orange)
-                    Text("\(TimeFormat.short(s.bookRemaining)) left")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                 }
             } else {
                 emptyState
@@ -117,61 +117,82 @@ struct NowPlayingWidgetView: View {
         }
     }
 
+    /// Cover as tall as the widget; title, chapter number, progress, and the full set of controls.
     private var medium: some View {
         Group {
             if s.hasBook {
-                HStack(spacing: 14) {
-                    cover(size: 116)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(s.bookTitle)
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(chapterLine)
-                            .font(.caption)
+                GeometryReader { geo in
+                    HStack(spacing: Spacing.s) {
+                        cover(size: geo.size.height)
+                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                            Text(s.bookTitle)
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(chapterLine)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: Spacing.xxs)
+                            ribbon
+                            HStack {
+                                Text(TimeFormat.clock(s.scopeElapsed))
+                                Spacer()
+                                Text("\(TimeFormat.short(s.bookRemaining)) left")
+                            }
+                            .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Spacer(minLength: 2)
-                        ProgressView(value: s.scopeProgress)
-                            .tint(.orange)
-                        HStack {
-                            Text(TimeFormat.clock(s.scopeElapsed))
-                            Spacer()
-                            Text("\(TimeFormat.short(s.bookRemaining)) left")
+                            mediumControls
+                                .padding(.top, Spacing.xxs)
                         }
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        HStack {
-                            Spacer()
-                            Button(intent: SkipBackwardIntent()) {
-                                Image(systemName: skipIcon(back: true, seconds: s.skipBack))
-                                    .font(.title3)
-                            }
-                            Spacer()
-                            playButton(size: 40)
-                            Spacer()
-                            Button(intent: SkipForwardIntent()) {
-                                Image(systemName: skipIcon(back: false, seconds: s.skipForward))
-                                    .font(.title3)
-                            }
-                            Spacer()
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
                     }
                 }
             } else {
                 emptyState
             }
         }
+    }
+
+    /// Previous chapter, skip back, play/pause, skip forward, next chapter: compact glyphs spread
+    /// evenly from the text's left edge to its right edge, so there's an equal gap between each.
+    private var mediumControls: some View {
+        HStack(spacing: 0) {
+            Button(intent: PreviousChapterIntent()) {
+                Image(systemName: "backward.end.fill").font(.system(size: 13))
+                    .frame(width: 24, height: 36)
+            }
+            .accessibilityLabel("Previous chapter")
+            Spacer(minLength: Spacing.xxs)
+            Button(intent: SkipBackwardIntent()) {
+                SkipGlyph(back: true, seconds: s.skipBack, size: 19, numberSize: 7)
+                    .frame(width: 28, height: 36)
+            }
+            .accessibilityLabel("Skip back")
+            Spacer(minLength: Spacing.xxs)
+            playButton(size: 34)
+            Spacer(minLength: Spacing.xxs)
+            Button(intent: SkipForwardIntent()) {
+                SkipGlyph(back: false, seconds: s.skipForward, size: 19, numberSize: 7)
+                    .frame(width: 28, height: 36)
+            }
+            .accessibilityLabel("Skip forward")
+            Spacer(minLength: Spacing.xxs)
+            Button(intent: NextChapterIntent()) {
+                Image(systemName: "forward.end.fill").font(.system(size: 13))
+                    .frame(width: 24, height: 36)
+            }
+            .accessibilityLabel("Next chapter")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
     }
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Image(systemName: "headphones")
-                .font(.title)
-                .foregroundStyle(.orange)
+            MascotView(size: 58, mood: .curious, animated: false)
             Text("No audiobook")
-                .font(.caption.weight(.semibold))
+                .font(.system(.caption).weight(.bold))
+                .foregroundStyle(.primary)
             Text("Open the app to start listening")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -221,18 +242,16 @@ struct NowPlayingWidgetView: View {
     // MARK: - Pieces
 
     private var chapterLine: String {
-        s.chapterCount > 1 ? "\(s.chapterIndex + 1)/\(s.chapterCount) · \(s.chapterTitle)" : s.author
+        s.chapterCount > 1 ? "Chapter \(s.chapterIndex + 1) of \(s.chapterCount)" : s.author
     }
 
     private func playButton(size: CGFloat) -> some View {
         Button(intent: TogglePlaybackIntent()) {
-            Image(systemName: s.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: size * 0.42, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: size, height: size)
-                .background(Circle().fill(Color.orange))
+            PlayBadge(isPlaying: s.isPlaying, size: size)
+                .shadow(color: Theme.accent.opacity(0.35), radius: 6, y: 3)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(s.isPlaying ? "Pause" : "Play")
     }
 
     private func cover(size: CGFloat) -> some View {
@@ -243,20 +262,30 @@ struct NowPlayingWidgetView: View {
                     .scaledToFill()
             } else {
                 ZStack {
-                    LinearGradient(colors: [.orange, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: "headphones")
-                        .font(.system(size: size * 0.4, weight: .semibold))
-                        .foregroundStyle(.white)
+                    PrismImage()
+                        .environment(\.colorScheme, .light)
+                    MascotView(size: size * 0.72, headphones: true, animated: false)
                 }
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: size * 0.14, style: .continuous)
+                .strokeBorder(.white.opacity(0.6), lineWidth: 0.75)
+        }
     }
 
-    private func skipIcon(back: Bool, seconds: Double) -> String {
-        let n = Int(seconds)
-        let base = back ? "gobackward" : "goforward"
-        return [5, 10, 15, 30, 45, 60, 75, 90].contains(n) ? "\(base).\(n)" : base
+    /// Iridescent progress ribbon.
+    private var ribbon: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.12))
+                Capsule()
+                    .fill(Theme.iridescent)
+                    .frame(width: max(4, geo.size.width * s.scopeProgress))
+            }
+        }
+        .frame(height: 4)
     }
 }

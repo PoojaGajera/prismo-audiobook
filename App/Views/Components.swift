@@ -26,10 +26,9 @@ struct CoverView: View {
     private var placeholder: some View {
         GeometryReader { geo in
             ZStack {
-                LinearGradient(colors: [.orange, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)
-                Image(systemName: "headphones")
-                    .font(.system(size: geo.size.width * 0.38, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                Theme.coverPlaceholder
+                MascotView(size: geo.size.width * 0.7, headphones: true, animated: false)
+                    .shadow(color: Theme.mascotBlue.opacity(0.25), radius: geo.size.width * 0.05, y: geo.size.width * 0.03)
             }
         }
     }
@@ -41,7 +40,7 @@ enum CoverCache {
 
     static func image(for book: Book) -> UIImage? {
         guard let url = LibraryStore.shared.coverURL(for: book) else { return nil }
-        let key = url.path as NSString
+        let key = "\(url.path)#\(book.coverVersion ?? 0)" as NSString
         if let cached = cache.object(forKey: key) { return cached }
         guard let image = UIImage(contentsOfFile: url.path) else { return nil }
         cache.setObject(image, forKey: key)
@@ -51,13 +50,17 @@ enum CoverCache {
 
 /// The system volume slider (controls the iPhone's actual volume).
 struct SystemVolumeSlider: UIViewRepresentable {
+    var tint: UIColor = Theme.uiAccent
+
     func makeUIView(context: Context) -> MPVolumeView {
         let view = MPVolumeView(frame: .zero)
-        view.tintColor = .systemOrange
+        view.tintColor = tint
         return view
     }
 
-    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {
+        uiView.tintColor = tint
+    }
 }
 
 /// AirPlay / Bluetooth output picker.
@@ -65,7 +68,7 @@ struct RoutePickerButton: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let view = AVRoutePickerView()
         view.tintColor = .label
-        view.activeTintColor = .systemOrange
+        view.activeTintColor = Theme.uiAccent
         view.prioritizesVideoDevices = false
         return view
     }
@@ -73,10 +76,3 @@ struct RoutePickerButton: UIViewRepresentable {
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 
-enum SkipIcon {
-    static func name(back: Bool, seconds: Double) -> String {
-        let n = Int(seconds)
-        let base = back ? "gobackward" : "goforward"
-        return [5, 10, 15, 30, 45, 60, 75, 90].contains(n) ? "\(base).\(n)" : base
-    }
-}

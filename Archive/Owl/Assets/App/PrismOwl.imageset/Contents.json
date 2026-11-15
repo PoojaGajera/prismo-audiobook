@@ -1,0 +1,22 @@
+{
+ "images": [
+  {
+   "filename": "owl-light.jpg",
+   "idiom": "universal"
+  },
+  {
+   "filename": "owl-dark.jpg",
+   "idiom": "universal",
+   "appearances": [
+    {
+     "appearance": "luminosity",
+     "value": "dark"
+    }
+   ]
+  }
+ ],
+ "info": {
+  "author": "xcode",
+  "version": 1
+ }
+}

@@ -3,6 +3,8 @@ import SwiftUI
 struct BookmarksView: View {
     @EnvironmentObject private var player: PlayerController
     @Environment(\.dismiss) private var dismiss
+    /// The playing book's cover colours (set by the player).
+    @Environment(\.coverTheme) private var theme
 
     @State private var editing: Bookmark?
     @State private var editText = ""
@@ -14,7 +16,8 @@ struct BookmarksView: View {
             Group {
                 if bookmarks.isEmpty {
                     ContentUnavailableView {
-                        Label("No bookmarks", systemImage: "bookmark")
+                        Label("No bookmarks yet", systemImage: "bookmark")
+                            .font(Theme.title(.title3))
                     } description: {
                         Text("Tap the bookmark button in the player to save your place with an optional note.")
                     } actions: {
@@ -31,6 +34,7 @@ struct BookmarksView: View {
                                 row(bookmark)
                             }
                             .buttonStyle(.plain)
+                            .listRowBackground(Theme.surface)
                             .swipeActions {
                                 Button(role: .destructive) {
                                     player.deleteBookmarks([bookmark.id])
@@ -43,12 +47,14 @@ struct BookmarksView: View {
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                 }
-                                .tint(.orange)
+                                .tint(theme.accent)
                             }
                         }
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background.ignoresSafeArea())
             .navigationTitle("Bookmarks")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -76,12 +82,12 @@ struct BookmarksView: View {
     private func row(_ bookmark: Bookmark) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "bookmark.fill")
-                .foregroundStyle(.tint)
+                .foregroundStyle(theme.accent)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(TimeFormat.clock(bookmark.time))
-                        .font(.headline.monospacedDigit())
+                        .font(Theme.title(.headline).monospacedDigit())
                     if !bookmark.chapterTitle.isEmpty {
                         Text(bookmark.chapterTitle)
                             .font(.subheadline)
@@ -91,7 +97,7 @@ struct BookmarksView: View {
                 }
                 if !bookmark.note.isEmpty {
                     Text(bookmark.note)
-                        .font(.body)
+                        .font(.system(.body))
                 }
                 Text(bookmark.createdAt, format: .dateTime.day().month().year().hour().minute())
                     .font(.caption)

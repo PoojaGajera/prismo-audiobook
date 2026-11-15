@@ -9,7 +9,10 @@ final class LibraryStore: ObservableObject {
 
     @Published private(set) var books: [Book] = []
     @Published var isImporting = false
-    @Published var importMessage: String?
+    @Published var importMessage: String? {
+        didSet { if importMessage == nil { showNextMessage() } }
+    }
+    private var queuedMessages: [String] = []
 
     private let rootURL: URL
     private var booksURL: URL { rootURL.appendingPathComponent("Books", isDirectory: true) }
@@ -57,6 +60,73 @@ final class LibraryStore: ObservableObject {
         save()
     }
 
+    /// Replaces a book's chapters, keeping the originals so they can be restored.
+    /// Used for books that aren't loaded in the player (otherwise go through `PlayerController`).
+    @discardableResult
+    func replaceChapters(of id: UUID, with chapters: [Chapter], source: ChapterSource) -> Bool {
+        guard var b = book(id: id), b.chapterSource == .none, !chapters.isEmpty else { return false }
+        if b.originalChapters == nil {
+            b.originalChapters = b.chapters
+            b.originalChapterSource = b.chapterSource
+        }
+        b.chapters = chapters
+        b.chapterSource = source
+        update(b)
+        return true
+    }
+
+    /// Saves edited details, through the player when it's the loaded book.
+    func saveDetails(_ edited: Book) {
+        let player = PlayerController.shared
+        if player.book?.id == edited.id {
+            player.updateDetails(from: edited)
+        } else if let current = book(id: edited.id) {
+            update(current.withDetails(from: edited))
+        }
+        tidyChapterTitles(edited.id)
+    }
+
+    /// Chapter names that came from file names follow the book's tidy title:
+    /// - a book without chapter markers has one chapter, named after the book;
+    /// - a book made of several files has one chapter per file, with the file-name noise
+    ///   ("01 - ", "_", "[64kbps]"…) removed.
+    /// Chapters from the file's own markers or from Find Chapters are left as they are.
+    func tidyChapterTitles(_ id: UUID) {
+        guard let current = book(id: id) else { return }
+        var chapters = current.chapters
+        switch current.chapterSource {
+        case .none where chapters.count == 1:
+            chapters[0].title = current.title
+        case .perFile:
+            let author = current.hasKnownAuthor ? current.author : nil
+            for i in chapters.indices {
+                chapters[i].title = TitleCleaner.clean(chapters[i].title, author: author)
+            }
+        default:
+            return
+        }
+        guard chapters != current.chapters else { return }
+        let player = PlayerController.shared
+        if player.book?.id == id {
+            player.updateChapterTitles(chapters)
+        } else {
+            var updated = current
+            updated.chapters = chapters
+            update(updated)
+        }
+    }
+
+    /// Writes a new cover.jpg for the book. The caller sets `hasCover` and bumps `coverVersion`.
+    func writeCover(_ image: UIImage, for book: Book) -> Bool {
+        guard let jpeg = ImageUtils.jpegData(image, maxDimension: 1000) else { return false }
+        do {
+            try jpeg.write(to: folderURL(for: book).appendingPathComponent("cover.jpg"), options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func setFinished(_ book: Book, _ finished: Bool) {
         var b = book
         b.isFinished = finished
@@ -69,6 +139,21 @@ final class LibraryStore: ObservableObject {
         b.isFinished = false
         b.position = 0
         update(b)
+    }
+
+    // MARK: - Messages
+
+    /// Shows a message, or queues it if another one is still on screen.
+    func post(_ message: String) {
+        if importMessage == nil { importMessage = message } else { queuedMessages.append(message) }
+    }
+
+    private func showNextMessage() {
+        guard !queuedMessages.isEmpty else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400)) // let the previous alert finish dismissing
+            if importMessage == nil, !queuedMessages.isEmpty { importMessage = queuedMessages.removeFirst() }
+        }
     }
 
     // MARK: - Import
@@ -107,8 +192,10 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Imports staged files, either as one book (each file = a chapter) or one book per file.
-    func importStaged(_ urls: [URL], asSingleBook: Bool) async {
-        guard !urls.isEmpty else { return }
+    /// With `announce` off, no message is shown; the caller reports the returned books.
+    @discardableResult
+    func importStaged(_ urls: [URL], asSingleBook: Bool, announce: Bool = true) async -> [Book] {
+        guard !urls.isEmpty else { return [] }
         isImporting = true
         defer { isImporting = false }
 
@@ -126,22 +213,37 @@ final class LibraryStore: ObservableObject {
         }
         save()
         discardStaged(urls)
+        ChapterScanner.shared.enqueue(imported)
+        MetadataEnricher.shared.enqueue(imported)
+        guard announce else { return imported }
 
         if imported.isEmpty {
             importMessage = "Those files couldn't be read as audio."
         } else if imported.count == 1, let book = imported.first {
             switch book.chapterSource {
             case .embedded:
-                importMessage = "Imported “\(book.title)”. Found \(book.chapters.count) chapters in the file."
+                importMessage = "Imported “\(TitleCleaner.clean(book.title))”. Found \(book.chapters.count) chapters in the file."
             case .perFile:
-                importMessage = "Imported “\(book.title)” with \(book.chapters.count) chapters (one per file)."
-            case .none:
-                importMessage = "Imported “\(book.title)”. This file has no chapter markers."
+                importMessage = "Imported “\(TitleCleaner.clean(book.title))” with \(book.chapters.count) chapters (one per file)."
+            case .none, .detected, .interval:
+                if book.duration >= 2 * ChapterDetector.minimumGap {
+                    importMessage = "Imported “\(TitleCleaner.clean(book.title))”. It has no chapter markers, so I'm listening for chapter announcements. Keep the app open; you'll see the progress on the book's card."
+                } else {
+                    importMessage = "Imported “\(TitleCleaner.clean(book.title))”."
+                }
             }
         } else {
             let chaptered = imported.filter { $0.chapterSource == .embedded }.count
             importMessage = "Imported \(imported.count) books. \(chaptered) of them have chapter markers."
         }
+        return imported
+    }
+
+    /// The file names and sizes of every book, to recognise the same audio arriving again.
+    func fileSignatures() -> Set<String> {
+        Set(books.map { book in
+            FolderSync.signature(book.files.map { fileURL(for: book, file: $0) })
+        })
     }
 
     /// Handles a file opened in this app from Files / share sheet.
@@ -194,6 +296,7 @@ final class LibraryStore: ObservableObject {
             do {
                 try jpeg.write(to: folder.appendingPathComponent("cover.jpg"), options: .atomic)
                 book.hasCover = true
+                book.coverOrigin = "file"
             } catch {}
         }
         return book

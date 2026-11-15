@@ -9,7 +9,7 @@ struct PlayPauseControl: ControlWidget {
             ControlWidgetToggle("Audiobook", isOn: isPlaying, action: SetPlayingIntent()) { isOn in
                 Label(isOn ? "Playing" : "Paused", systemImage: isOn ? "pause.fill" : "play.fill")
             }
-            .tint(.orange)
+            .tint(Theme.accent)
         }
         .displayName("Play/Pause Audiobook")
         .description("Plays or pauses your current audiobook.")

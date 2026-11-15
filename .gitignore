@@ -13,3 +13,9 @@ build/
 .DS_Store
 # Claude Code local settings
 .claude/settings.local.json
+
+# Files saved from Claude chats
+Claude outputs/
+
+# Test audiobooks generated for simulator/device testing
+TestAudio/

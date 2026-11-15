@@ -48,6 +48,34 @@ struct SkipForwardIntent: AudioPlaybackIntent {
     }
 }
 
+struct PreviousChapterIntent: AudioPlaybackIntent {
+    static var title: LocalizedStringResource = "Previous Chapter"
+    static var description = IntentDescription("Goes to the start of the chapter, or the one before.")
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        #if MAIN_APP
+        await MainActor.run { PlayerController.shared.previousChapter() }
+        #endif
+        return .result()
+    }
+}
+
+struct NextChapterIntent: AudioPlaybackIntent {
+    static var title: LocalizedStringResource = "Next Chapter"
+    static var description = IntentDescription("Skips to the next chapter.")
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        #if MAIN_APP
+        await MainActor.run { PlayerController.shared.nextChapter() }
+        #endif
+        return .result()
+    }
+}
+
 /// Used by the Control Center / Lock Screen control (iOS 18+).
 struct SetPlayingIntent: SetValueIntent, AudioPlaybackIntent {
     static var title: LocalizedStringResource = "Set Audiobook Playing"

@@ -10,6 +10,7 @@ A native SwiftUI audiobook player for iOS 18+ with a Home Screen / Lock Screen w
   - M4B / M4A / MP4 chapter tracks (via AVFoundation)
   - MP3 ID3v2.3/2.4 `CHAP` frames (custom parser, `ID3ChapterParser.swift`)
   - Multi-file books: one chapter per file, with natural sort order (`Part 2` before `Part 10`)
+- **Find Chapters** for books without any: transcribes the book on the device and adds a chapter wherever the narrator announces one ("Chapter one", "Chapter 12"…). Shows a preview first, and can be redone or restored.
 - **Player:** play/pause, skip back/forward, previous/next chapter, scrubbing, speed 0.5×–3× (presets plus fine slider), system volume slider, AirPlay/Bluetooth output picker
 - **Bookmarks** with optional notes (add, edit, delete, jump)
 - **Resume where you left off.** Position is saved every 5 seconds, on pause, and when the app goes to the background.
@@ -25,6 +26,7 @@ A native SwiftUI audiobook player for iOS 18+ with a Home Screen / Lock Screen w
 - **Lock Screen / Control Center / headphones / CarPlay** controls via `MPRemoteCommandCenter`
 - **Widgets:** small and medium Home Screen widgets, plus Lock Screen circular, rectangular and inline widgets with **interactive play/pause and skip buttons**
 - **Control Center control** (iOS 18), which can also go on the Lock Screen or the Action Button
+- **Design:** an animated mascot, a refracted "prism" glass background that shimmers gently, rounded type, and light and dark looks. Animations can be turned off in Settings, and they respect Reduce Motion.
 
 ## Requirements
 
