@@ -43,6 +43,8 @@ struct NowPlayingSnapshot: Codable, Equatable {
     var useChapterContext: Bool
     var adjustForSpeed: Bool
     var updatedAt: Date
+    /// True when the app was closed (it saves one last snapshot as it quits).
+    var appClosed: Bool? = nil
 
     static let empty = NowPlayingSnapshot(
         hasBook: false, bookID: "", bookTitle: "", author: "", chapterTitle: "",
@@ -75,6 +77,26 @@ struct NowPlayingSnapshot: Codable, Equatable {
     var scopeProgress: Double { scopeDuration > 0 ? min(1, scopeElapsed / scopeDuration) : 0 }
     var scopeRemaining: Double { max(0, scopeDuration - scopeElapsed) / (adjustForSpeed ? speed : 1) }
     var bookRemaining: Double { max(0, bookDuration - bookElapsed) / (adjustForSpeed ? speed : 1) }
+
+    /// Whether the app is probably still running (playing, or in the background less than 10
+    /// minutes since it last saved). The widget can't ask iOS, so it guesses: Play then works in
+    /// the background when the app is running, and opens the app when it's probably closed.
+    func appLikelyRunning(at date: Date) -> Bool {
+        guard appClosed != true else { return false }
+        return isPlaying || date.timeIntervalSince(updatedAt) < Self.runningWindow
+    }
+
+    static let runningWindow: TimeInterval = 600
+
+    /// The real-time span of the current chapter (or book), from its start to its end at the
+    /// current speed, worked out from when this snapshot was saved. Widgets draw progress from it
+    /// with `ProgressView(timerInterval:)`, which iOS animates live, with no reloads.
+    var scopeInterval: ClosedRange<Date> {
+        let rate = max(0.1, speed)
+        let start = updatedAt.addingTimeInterval(-scopeElapsed / rate)
+        let end = start.addingTimeInterval(max(1, scopeDuration) / rate)
+        return start...max(end, start.addingTimeInterval(1))
+    }
 }
 
 enum SharedStore {

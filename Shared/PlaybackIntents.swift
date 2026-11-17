@@ -14,7 +14,13 @@ struct TogglePlaybackIntent: AudioPlaybackIntent {
 
     func perform() async throws -> some IntentResult {
         #if MAIN_APP
-        await MainActor.run { PlayerController.shared.togglePlayPause() }
+        let player = await PlayerController.shared
+        if await player.isPlaying {
+            await player.pause()
+        } else {
+            // Waits until sound starts, so a background launch isn't suspended first.
+            await player.playAndWait()
+        }
         #endif
         return .result()
     }
@@ -88,7 +94,51 @@ struct SetPlayingIntent: SetValueIntent, AudioPlaybackIntent {
     func perform() async throws -> some IntentResult {
         #if MAIN_APP
         let shouldPlay = value
-        await MainActor.run { PlayerController.shared.setPlaying(shouldPlay) }
+        let player = await PlayerController.shared
+        let playing = await player.isPlaying
+        // The control shows the last saved state, which can be stale (e.g. the app was closed
+        // while playing). A tap on a stale "Playing" sends Pause to a stopped player: play
+        // instead, since that's what the tap meant.
+        if shouldPlay || !playing {
+            // Waits until sound starts, so a background launch isn't suspended first.
+            await player.playAndWait()
+        } else {
+            await player.pause()
+        }
+        #endif
+        return .result()
+    }
+}
+
+/// Play from the widget: opens the app (in front) and plays the widget's book there, with the
+/// player open. Used for the widget's Play (when nothing is playing): the widget can't tell
+/// whether the app is still running, and playing from a background launch wasn't reliable, so
+/// Play always brings the app up. Pause stays in the background (`SetPlayingIntent`).
+struct PlayInAppIntent: AppIntent {
+    static var title: LocalizedStringResource = "Play Audiobook"
+    static var description = IntentDescription("Opens the app and plays the audiobook.")
+    static var openAppWhenRun: Bool = true
+    static var isDiscoverable: Bool = false
+
+    @Parameter(title: "Book ID")
+    var bookID: String
+
+    init() {}
+
+    init(bookID: String) {
+        self.bookID = bookID
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        #if MAIN_APP
+        let player = PlayerController.shared
+        if let id = UUID(uuidString: bookID), player.book?.id != id,
+           let book = LibraryStore.shared.book(id: id), book.hasAudio {
+            player.load(book, autoplay: false)
+        }
+        AppRouter.shared.showPlayer = true
+        await player.playAndWait()
         #endif
         return .result()
     }

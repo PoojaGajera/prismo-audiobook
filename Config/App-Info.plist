@@ -33,7 +33,11 @@
 		</dict>
 	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Audiobooks listens to short moments of your audiobook, on your iPhone, to recognise spoken chapter titles when finding chapters.</string>
+	<string>Prismo listens to short moments of your audiobook, on your iPhone, to recognise spoken chapter titles when finding chapters.</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).findChapters.*</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

@@ -51,10 +51,14 @@ struct BookmarksView: View {
                             }
                         }
                     }
+                    // Full-width rows on one plain surface, so a swipe (Delete / Edit) only ever
+                    // reveals that surface, not the page's coloured background (pink smoke, sky).
+                    .listStyle(.plain)
+                    .listRowSeparatorTint(Theme.hairline)
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Theme.background.ignoresSafeArea())
+            .background { Theme.surface.ignoresSafeArea() }
             .navigationTitle("Bookmarks")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -82,7 +86,7 @@ struct BookmarksView: View {
     private func row(_ bookmark: Bookmark) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "bookmark.fill")
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(Theme.readable(theme.accent, on: Color.white))
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
@@ -91,7 +95,7 @@ struct BookmarksView: View {
                     if !bookmark.chapterTitle.isEmpty {
                         Text(bookmark.chapterTitle)
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .lineLimit(1)
                     }
                 }
@@ -101,7 +105,7 @@ struct BookmarksView: View {
                 }
                 Text(bookmark.createdAt, format: .dateTime.day().month().year().hour().minute())
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
         }

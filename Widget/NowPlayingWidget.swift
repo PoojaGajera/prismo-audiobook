@@ -11,10 +11,12 @@ struct NowPlayingEntry: TimelineEntry {
 
 struct NowPlayingProvider: TimelineProvider {
     func placeholder(in context: Context) -> NowPlayingEntry {
-        NowPlayingEntry(date: Date(), snapshot: .placeholder, cover: nil)
+        Theme.reloadSharedTheme()
+        return NowPlayingEntry(date: Date(), snapshot: .placeholder, cover: nil)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (NowPlayingEntry) -> Void) {
+        Theme.reloadSharedTheme()
         if context.isPreview && SharedStore.loadSnapshot()?.hasBook != true {
             completion(placeholder(in: context))
             return
@@ -24,6 +26,7 @@ struct NowPlayingProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<NowPlayingEntry>) -> Void) {
+        Theme.reloadSharedTheme()
         let snapshot = SharedStore.loadSnapshot() ?? .empty
         let cover = SharedStore.loadCover()
         let now = Date()
@@ -36,7 +39,14 @@ struct NowPlayingProvider: TimelineProvider {
             }
             completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60))))
         } else {
-            completion(Timeline(entries: [NowPlayingEntry(date: now, snapshot: snapshot, cover: cover)], policy: .never))
+            // Paused: one entry now and, if the app may still be running, one more when that
+            // guess runs out, so Play switches from "play in the background" to "open the app".
+            var entries = [NowPlayingEntry(date: now, snapshot: snapshot, cover: cover)]
+            let expiry = snapshot.updatedAt.addingTimeInterval(NowPlayingSnapshot.runningWindow + 1)
+            if snapshot.appLikelyRunning(at: now), expiry > now {
+                entries.append(NowPlayingEntry(date: expiry, snapshot: snapshot, cover: cover))
+            }
+            completion(Timeline(entries: entries, policy: .never))
         }
     }
 }
@@ -59,9 +69,11 @@ struct NowPlayingWidgetView: View {
     private var s: NowPlayingSnapshot { entry.snapshot }
 
     var body: some View {
-        content
+        themed(content)
             .widgetURL(URL(string: "\(SharedConfig.urlScheme)://player"))
-            .containerBackground(for: .widget) { background }
+            .containerBackground(for: .widget) {
+                background.environment(\.colorScheme, homeScreenScheme ?? colorScheme)
+            }
     }
 
     @ViewBuilder
@@ -75,14 +87,44 @@ struct NowPlayingWidgetView: View {
         }
     }
 
+    private var isHomeScreen: Bool { family == .systemSmall || family == .systemMedium }
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// The Home Screen widget's fixed look: always dark (light text on a dark background, whatever
+    /// the phone's light/dark setting), except Pink smoke, which is a light theme (dark text on
+    /// pale pink). Lock Screen widgets follow the system. Nil = follow the system.
+    private var homeScreenScheme: ColorScheme? {
+        guard isHomeScreen else { return nil }
+        // Cloud Nine keeps the dark look the user asked for; the other themes are light.
+        return (Theme.current == .cloudNine || Theme.isDark) ? .dark : .light
+    }
+
+    @ViewBuilder
+    private func themed<V: View>(_ view: V) -> some View {
+        if let scheme = homeScreenScheme {
+            view.environment(\.colorScheme, scheme)
+        } else {
+            view
+        }
+    }
+
     @ViewBuilder
     private var background: some View {
         switch family {
         case .systemSmall, .systemMedium:
-            ZStack {
-                PrismImage()
-                // Frost the glass so text stays readable in light and dark.
-                Theme.background.opacity(0.55)
+            if Theme.isBlossom {
+                BlossomBackdrop()
+            } else if Theme.isCosmos {
+                CosmosBackdrop()
+            } else if Theme.current != .cloudNine {
+                ThemeBackdrop(stops: Theme.current.smokeStops)
+            } else {
+                ZStack {
+                    PrismImage()
+                    // Frost the glass so text stays readable in light and dark.
+                    Theme.background.opacity(0.55)
+                }
             }
         default:
             Color.clear
@@ -105,11 +147,19 @@ struct NowPlayingWidgetView: View {
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    Text(s.bookTitle)
-                        .font(.system(.caption).weight(.bold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
+                    VStack(spacing: 0) {
+                        Text(s.bookTitle)
+                            .font(.system(.caption).weight(.bold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if !s.author.isEmpty {
+                            Text(s.author)
+                                .font(.caption2)
+                                .foregroundStyle(Theme.secondaryText)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             } else {
                 emptyState
@@ -117,7 +167,7 @@ struct NowPlayingWidgetView: View {
         }
     }
 
-    /// Cover as tall as the widget; title, chapter number, progress, and the full set of controls.
+    /// Cover as tall as the widget; title, author, chapter, progress, and the full set of controls.
     private var medium: some View {
         Group {
             if s.hasBook {
@@ -125,15 +175,25 @@ struct NowPlayingWidgetView: View {
                     HStack(spacing: Spacing.s) {
                         cover(size: geo.size.height)
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
-                            Text(s.bookTitle)
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Text(chapterLine)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: Spacing.xxs)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(s.bookTitle)
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                if !s.author.isEmpty {
+                                    Text(s.author)
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.secondaryText)
+                                        .lineLimit(1)
+                                }
+                                if s.chapterCount > 1 {
+                                    Text(chapterLine)
+                                        .font(.caption2)
+                                        .foregroundStyle(Theme.secondaryText)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 0)
                             ribbon
                             HStack {
                                 Text(TimeFormat.clock(s.scopeElapsed))
@@ -141,9 +201,8 @@ struct NowPlayingWidgetView: View {
                                 Text("\(TimeFormat.short(s.bookRemaining)) left")
                             }
                             .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             mediumControls
-                                .padding(.top, Spacing.xxs)
                         }
                     }
                 }
@@ -195,7 +254,7 @@ struct NowPlayingWidgetView: View {
                 .foregroundStyle(.primary)
             Text("Open the app to start listening")
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
         }
     }
@@ -203,25 +262,34 @@ struct NowPlayingWidgetView: View {
     // MARK: - Lock Screen
 
     private var circular: some View {
-        Button(intent: TogglePlaybackIntent()) {
-            Gauge(value: s.scopeProgress) {
-                EmptyView()
-            } currentValueLabel: {
-                Image(systemName: s.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title3)
+        controlButton {
+            if s.isPlaying, s.scopeDuration > 0 {
+                // The ring moves live while playing.
+                ProgressView(timerInterval: s.scopeInterval, countsDown: false) {
+                    EmptyView()
+                } currentValueLabel: {
+                    Image(systemName: "pause.fill")
+                        .font(.title3)
+                }
+                .progressViewStyle(.circular)
+            } else {
+                Gauge(value: s.scopeProgress) {
+                    EmptyView()
+                } currentValueLabel: {
+                    Image(systemName: s.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title3)
+                }
+                .gaugeStyle(.accessoryCircularCapacity)
             }
-            .gaugeStyle(.accessoryCircularCapacity)
         }
-        .buttonStyle(.plain)
     }
 
     private var rectangular: some View {
         HStack(spacing: 8) {
-            Button(intent: TogglePlaybackIntent()) {
+            controlButton {
                 Image(systemName: s.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 30))
             }
-            .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 1) {
                 Text(s.hasBook ? s.bookTitle : "No audiobook")
                     .font(.headline)
@@ -229,7 +297,17 @@ struct NowPlayingWidgetView: View {
                 Text(s.hasBook ? s.chapterTitle : "Open the app")
                     .font(.caption)
                     .lineLimit(1)
-                ProgressView(value: s.scopeProgress)
+                if s.isPlaying, s.scopeDuration > 0 {
+                    // Moves live while playing.
+                    ProgressView(timerInterval: s.scopeInterval, countsDown: false) {
+                        EmptyView()
+                    } currentValueLabel: {
+                        EmptyView()
+                    }
+                    .labelsHidden()
+                } else {
+                    ProgressView(value: s.scopeProgress)
+                }
             }
         }
     }
@@ -245,13 +323,28 @@ struct NowPlayingWidgetView: View {
         s.chapterCount > 1 ? "Chapter \(s.chapterIndex + 1) of \(s.chapterCount)" : s.author
     }
 
+    /// Play/pause. Pause, and Play while the app is running, are plain intent buttons
+    /// (`TogglePlaybackIntent`: they run inside the app, in the background). Play when the app is
+    /// probably closed opens it and plays there (`PlayInAppIntent`).
     private func playButton(size: CGFloat) -> some View {
-        Button(intent: TogglePlaybackIntent()) {
+        controlButton {
             PlayBadge(isPlaying: s.isPlaying, size: size)
                 .shadow(color: Theme.accent.opacity(0.35), radius: 6, y: 3)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(s.isPlaying ? "Pause" : "Play")
+    }
+
+    /// Wraps a control's look in the right intent button for the current state.
+    @ViewBuilder
+    private func controlButton<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        if s.isPlaying || s.appLikelyRunning(at: entry.date) {
+            Button(intent: TogglePlaybackIntent()) { label() }
+                .buttonStyle(.plain)
+                .accessibilityLabel(s.isPlaying ? "Pause" : "Play")
+        } else {
+            Button(intent: PlayInAppIntent(bookID: s.bookID)) { label() }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Play")
+        }
     }
 
     private func cover(size: CGFloat) -> some View {
@@ -276,8 +369,26 @@ struct NowPlayingWidgetView: View {
         }
     }
 
-    /// Iridescent progress ribbon.
+    /// Progress: while playing, a bar iOS moves live (no widget reloads needed); when paused, the
+    /// iridescent ribbon at the saved spot.
+    @ViewBuilder
     private var ribbon: some View {
+        if s.isPlaying, s.scopeDuration > 0 {
+            ProgressView(timerInterval: s.scopeInterval, countsDown: false) {
+                EmptyView()
+            } currentValueLabel: {
+                EmptyView()
+            }
+            .progressViewStyle(.linear)
+            .tint(Theme.accent)
+            .labelsHidden()
+            .frame(height: 4)
+        } else {
+            staticRibbon
+        }
+    }
+
+    private var staticRibbon: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.12))
@@ -287,5 +398,56 @@ struct NowPlayingWidgetView: View {
             }
         }
         .frame(height: 4)
+    }
+}
+
+/// The "Pink smoke" theme for the widget: a still, soft pink haze (widgets can't animate the
+/// app's moving smoke), pale enough for dark text.
+private struct BlossomBackdrop: View {
+    var body: some View {
+        MeshGradient(
+            width: 3, height: 3,
+            points: [[0, 0], [0.5, 0], [1, 0],
+                     [0, 0.5], [0.62, 0.42], [1, 0.5],
+                     [0, 1], [0.4, 1], [1, 1]],
+            colors: [Color(hex: 0xFFE4EE), Color(hex: 0xF8BBD0), Color(hex: 0xFFF0F5),
+                     Color(hex: 0xF48FB1), Color(hex: 0xFFFAFC), Color(hex: 0xF8BBD0),
+                     Color(hex: 0xFFF0F5), Color(hex: 0xF8BBD0), Color(hex: 0xFCE4EC)])
+            .overlay(Color.white.opacity(0.35))
+    }
+}
+
+/// The "Cosmos" theme for the widget: a still, soft lavender haze (Pink smoke's twin, in purple),
+/// pale enough for dark text.
+private struct CosmosBackdrop: View {
+    var body: some View {
+        MeshGradient(
+            width: 3, height: 3,
+            points: [[0, 0], [0.5, 0], [1, 0],
+                     [0, 0.5], [0.62, 0.42], [1, 0.5],
+                     [0, 1], [0.4, 1], [1, 1]],
+            colors: [Color(hex: 0xEDE6FF), Color(hex: 0xD3C4FB), Color(hex: 0xF4F0FF),
+                     Color(hex: 0xB9A3F5), Color(hex: 0xFCFAFF), Color(hex: 0xD3C4FB),
+                     Color(hex: 0xF4F0FF), Color(hex: 0xD3C4FB), Color(hex: 0xEAE2FE)])
+            .overlay(Color.white.opacity(0.35))
+    }
+}
+
+/// Lemon Drop, Coral Reef and Matcha Latte on the widget: a still, soft haze of the theme's
+/// paler smoke tones, pale enough for dark text.
+private struct ThemeBackdrop: View {
+    let stops: [UInt32]
+
+    var body: some View {
+        let pale = Color(hex: stops[4]), light = Color(hex: stops[3]), mid = Color(hex: stops[2])
+        MeshGradient(
+            width: 3, height: 3,
+            points: [[0, 0], [0.5, 0], [1, 0],
+                     [0, 0.5], [0.62, 0.42], [1, 0.5],
+                     [0, 1], [0.4, 1], [1, 1]],
+            colors: [light, mid, pale,
+                     mid, pale, light,
+                     pale, light, light])
+            .overlay(Theme.isDark ? Color.clear : Color.white.opacity(0.35))
     }
 }

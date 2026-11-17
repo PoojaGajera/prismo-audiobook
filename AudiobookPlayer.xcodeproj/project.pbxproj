@@ -7,10 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		10916FE630AC16F2003C481A /* AudiobooksWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 10916FDC30AC16F1003C481A /* AudiobooksWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		1F3E56FA3903FC4520663A0A /* AudiobookWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1C7052EC5FC02E5BD365EC48 /* AudiobookWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		10916FE430AC16F2003C481A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10916FDB30AC16F1003C481A;
+			remoteInfo = "AudiobooksWatch Watch App";
+		};
 		431387EB7262E1CFC79B125E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
@@ -21,6 +29,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		10916FEA30AC16F2003C481A /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				10916FE630AC16F2003C481A /* AudiobooksWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CF85AC55444E92E2A151D05E /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -36,6 +55,7 @@
 
 /* Begin PBXFileReference section */
 		06CF9B5775BCF621072FED01 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		10916FDC30AC16F1003C481A /* AudiobooksWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AudiobooksWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		1C7052EC5FC02E5BD365EC48 /* AudiobookWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AudiobookWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B361E37958292C40F41A462 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		7E79D29566FD8889F06C25A3 /* Widget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widget.entitlements; sourceTree = "<group>"; };
@@ -48,6 +68,11 @@
 		027379FA0977A33B72632DE8 /* App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = App;
+			sourceTree = "<group>";
+		};
+		10916FDD30AC16F1003C481A /* AudiobooksWatch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "AudiobooksWatch Watch App";
 			sourceTree = "<group>";
 		};
 		2CAAAAB80B903BE3ED26246B /* Shared */ = {
@@ -70,6 +95,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		10916FD930AC16F1003C481A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C2B571F11AF4AD9F122E48C3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -85,6 +117,7 @@
 			children = (
 				81918909E83595C8F4212CCC /* Audiobooks.app */,
 				1C7052EC5FC02E5BD365EC48 /* AudiobookWidgetExtension.appex */,
+				10916FDC30AC16F1003C481A /* AudiobooksWatch Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +141,7 @@
 				2CAAAAB80B903BE3ED26246B /* Shared */,
 				3EEF7D8B7A3B439D41A876E3 /* Widget */,
 				7173545D75AC56744F55E81B /* Config */,
+				10916FDD30AC16F1003C481A /* AudiobooksWatch Watch App */,
 				1BADDC1D73C1A20F347483E1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -115,6 +149,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		10916FDB30AC16F1003C481A /* AudiobooksWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10916FE730AC16F2003C481A /* Build configuration list for PBXNativeTarget "AudiobooksWatch Watch App" */;
+			buildPhases = (
+				10916FD830AC16F1003C481A /* Sources */,
+				10916FD930AC16F1003C481A /* Frameworks */,
+				10916FDA30AC16F1003C481A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				10916FDD30AC16F1003C481A /* AudiobooksWatch Watch App */,
+			);
+			name = "AudiobooksWatch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "AudiobooksWatch Watch App";
+			productReference = 10916FDC30AC16F1003C481A /* AudiobooksWatch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
 		3D4C91345015A4DD0A099400 /* Audiobooks */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 780754F98F0CCAA36D4D0A49 /* Build configuration list for PBXNativeTarget "Audiobooks" */;
@@ -123,11 +179,13 @@
 				0248D6DB510EB0F7E9C05175 /* Frameworks */,
 				82A968CB662751220D4DFE2D /* Resources */,
 				CF85AC55444E92E2A151D05E /* Embed Foundation Extensions */,
+				10916FEA30AC16F2003C481A /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				E54DEBD65D8142E7785275AA /* PBXTargetDependency */,
+				10916FE530AC16F2003C481A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				027379FA0977A33B72632DE8 /* App */,
@@ -170,9 +228,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1600;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					10916FDB30AC16F1003C481A = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					3D4C91345015A4DD0A099400 = {
 						CreatedOnToolsVersion = 16.0;
 					};
@@ -197,11 +258,19 @@
 			targets = (
 				3D4C91345015A4DD0A099400 /* Audiobooks */,
 				E8173D1080A28ECDFD3BF6B2 /* AudiobookWidgetExtension */,
+				10916FDB30AC16F1003C481A /* AudiobooksWatch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		10916FDA30AC16F1003C481A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		3EB9B1A63CB0AF905AC09EAB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -219,6 +288,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		10916FD830AC16F1003C481A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C861C1B2713F1DA729267477 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -236,6 +312,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		10916FE530AC16F2003C481A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 10916FDB30AC16F1003C481A /* AudiobooksWatch Watch App */;
+			targetProxy = 10916FE430AC16F2003C481A /* PBXContainerItemProxy */;
+		};
 		E54DEBD65D8142E7785275AA /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = E8173D1080A28ECDFD3BF6B2 /* AudiobookWidgetExtension */;
@@ -244,6 +325,88 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		10916FE830AC16F2003C481A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Prismo;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.pooja.books.audiobooks;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pooja.books.audiobooks.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		10916FE930AC16F2003C481A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Prismo;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.pooja.books.audiobooks;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pooja.books.audiobooks.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 		191734982F22ABEBB64A1AE0 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -254,7 +417,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/App-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = Audiobooks;
+				INFOPLIST_KEY_CFBundleDisplayName = Prismo;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
@@ -285,7 +448,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Widget-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = Audiobooks;
+				INFOPLIST_KEY_CFBundleDisplayName = Prismo;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -311,7 +474,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/App-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = Audiobooks;
+				INFOPLIST_KEY_CFBundleDisplayName = Prismo;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
@@ -342,7 +505,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Widget-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = Audiobooks;
+				INFOPLIST_KEY_CFBundleDisplayName = Prismo;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -474,6 +637,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		10916FE730AC16F2003C481A /* Build configuration list for PBXNativeTarget "AudiobooksWatch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10916FE830AC16F2003C481A /* Debug */,
+				10916FE930AC16F2003C481A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		71371EFA15DA3BB408E93DEB /* Build configuration list for PBXProject "AudiobookPlayer" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

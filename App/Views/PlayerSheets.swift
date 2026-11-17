@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 // The player's small sheets (speed, more, bookmark saved). They all share one look:
-// a solid background tinted by the cover, a small round close button on the left, a centred
+// a solid background tinted by the cover, a small round close button on the right, a centred
 // title, then solid chips and buttons in the cover's colours. No glass or blur. Each sheet is
 // exactly as tall as its content (no empty space at the bottom).
 
@@ -32,9 +32,10 @@ struct PlayerSheetScaffold<Trailing: View, Content: View>: View {
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 HStack {
-                    ChipIconButton(systemName: "xmark", label: "Close", size: ChipIconButton.small) { dismiss() }
-                    Spacer()
+                    // Any extra button goes on the left; Close is always on the right.
                     trailing()
+                    Spacer()
+                    ChipIconButton(systemName: "xmark", label: "Close", size: ChipIconButton.small) { dismiss() }
                 }
             }
             content()
@@ -64,19 +65,32 @@ struct ChipIconButton: View {
     var systemName: String
     var label: String
     var size: CGFloat = 36
+    /// Glass instead of a solid fill: used on the player itself, where the colourful background
+    /// moves behind it. Sheets keep the solid fill.
+    var glass = false
     var action: () -> Void
 
     @Environment(\.coverTheme) private var theme
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(theme.onChip)
-                .frame(width: size, height: size)
-                .background(theme.chip, in: Circle())
-                .frame(width: max(44, size), height: max(44, size))
-                .contentShape(Rectangle())
+            Group {
+                if glass {
+                    Image(systemName: systemName)
+                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: size, height: size)
+                        .playerGlass(in: Circle())
+                } else {
+                    Image(systemName: systemName)
+                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .foregroundStyle(theme.onChip)
+                        .frame(width: size, height: size)
+                        .background(theme.chip, in: Circle())
+                }
+            }
+            .frame(width: max(44, size), height: max(44, size))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -179,14 +193,16 @@ struct MoreSheet: View {
     var body: some View {
         PlayerSheetScaffold(title: "More") {
             VStack(spacing: 0) {
+                row("About This Book", systemImage: "info.circle") { onSelect(.about) }
+                divider
                 row("Edit Details", systemImage: "square.and.pencil") { onSelect(.editDetails) }
                 divider
                 row("Bookmarks", systemImage: "bookmark",
                     detail: (player.book?.bookmarks.count).map { $0 > 0 ? "\($0)" : "" }) { onSelect(.bookmarks) }
-                divider
-                row("Playback Settings", systemImage: "gearshape") { onSelect(.settings) }
+                // (Playback Settings was removed from here by request: it's in the Settings tab.)
             }
-            .background(theme.chip, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            // Plain rows straight on the sheet (no card inside the card).
+            .padding(.horizontal, -Spacing.m)
         }
     }
 
@@ -254,19 +270,29 @@ struct BookmarkSavedSheet: View {
                         if !bookmark.chapterTitle.isEmpty {
                             Text(bookmark.chapterTitle)
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.secondaryText)
                                 .lineLimit(1)
                         }
                     }
                     Spacer(minLength: 0)
                 }
 
-                TextField("Add a note (optional)", text: $note, axis: .vertical)
+                // Always dark text on white, whatever the app theme (it used to follow Firefly
+                // Night's dark mode: light text on a dark box).
+                TextField("", text: $note,
+                          prompt: Text("Add a note (optional)").foregroundStyle(Color.black.opacity(0.45)),
+                          axis: .vertical)
                     .lineLimit(1...3)
+                    .foregroundStyle(Color.black.opacity(0.88))
+                    .tint(theme.accent)
                     .padding(.horizontal, Spacing.m)
                     .padding(.vertical, Spacing.s)
                     .frame(minHeight: 48)
-                    .background(theme.chip, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(theme.onChip.opacity(0.18), lineWidth: 1)
+                    }
 
                 HStack(spacing: Spacing.xs) {
                     SheetButton(title: "See Bookmarks") {
@@ -288,5 +314,23 @@ struct BookmarkSavedSheet: View {
         guard !trimmed.isEmpty, !noteSaved else { return }
         noteSaved = true
         player.updateBookmark(bookmark.id, note: trimmed)
+    }
+}
+
+// MARK: - Glass
+
+extension View {
+    /// The see-through glass used for the player's chips, so they stay readable whatever colour
+    /// of the moving background is behind them. Liquid Glass on iOS 26 and later; a frosted
+    /// material before that. Both turn more solid automatically with Reduce Transparency on.
+    @ViewBuilder
+    func playerGlass<S: Shape>(in shape: S) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self
+                .background(.regularMaterial, in: shape)
+                .overlay { shape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5) }
+        }
     }
 }

@@ -13,6 +13,13 @@ import UniformTypeIdentifiers
 /// (names and sizes), or when that file/folder was handled by an earlier check. The second
 /// rule means a book deleted in the app isn't re-added, and adding a file to a folder that
 /// was already imported doesn't create a second book.
+///
+/// The folder is the master list: a book that came from it, whose files have all been deleted
+/// from it, is deleted from the app too (with its progress). A finished book is the exception:
+/// its audio is removed but it stays in Finished as a record. For safety this only happens after
+/// a complete, successful read of the folder; files iCloud has offloaded (placeholders) count
+/// as still there; a book with only some of its files missing is kept; and nothing is removed
+/// when the folder looks completely empty (more likely a glitch than a real clear-out).
 @MainActor
 final class FolderSync: ObservableObject {
     static let shared = FolderSync()
@@ -42,6 +49,10 @@ final class FolderSync: ObservableObject {
     private struct Scan: Sendable {
         var candidates: [Candidate] = []
         var downloading = 0
+        /// True when the folder itself could be read (so a missing file really is missing).
+        var readable = false
+        /// Every audio file name seen, lowercased, including iCloud placeholders.
+        var fileNames: Set<String> = []
     }
 
     private var knownURL: URL {
@@ -98,6 +109,7 @@ final class FolderSync: ObservableObject {
         defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
 
         let scan = await Task.detached { Self.scan(folder) }.value
+        removeDeletedBooks(scan)
         let inLibrary = library.fileSignatures()
         let fresh = scan.candidates.filter {
             !known.keys.contains($0.key) && !known.signatures.contains($0.signature) && !inLibrary.contains($0.signature)
@@ -143,10 +155,40 @@ final class FolderSync: ObservableObject {
             let waiting = "\(scan.downloading) file\(scan.downloading == 1 ? " is" : "s are") still downloading from iCloud; they'll be added next time."
             message = message.map { "\($0) \(waiting)" } ?? waiting
         }
-        if added.contains(where: { $0.chapterSource == .none && $0.duration >= 2 * ChapterDetector.minimumGap }) {
-            message = (message ?? "") + " Looking for chapters in the books that have none."
+        // Automatic syncs (launch, return to the app, Sync) are quiet: new books just appear.
+        // Only "Check Now" in Settings, which asks for a result, reports one.
+        if announceNothingNew, let message { library.post(message) }
+    }
+
+    /// Deletes books that came from the folder and whose files are no longer in it.
+    private func removeDeletedBooks(_ scan: Scan) {
+        guard scan.readable, !scan.fileNames.isEmpty else { return }
+        let library = LibraryStore.shared
+        let player = PlayerController.shared
+        let gone = library.books.filter { book in
+            guard book.hasAudio else { return false } // already just a record
+            let urls = book.files.map { library.fileURL(for: book, file: $0) }
+            guard known.signatures.contains(Self.signature(urls)) else { return false } // not from the folder
+            // Gone only when none of its files is in the folder any more (not even offloaded).
+            return !urls.contains { scan.fileNames.contains($0.lastPathComponent.lowercased()) }
         }
-        if let message { library.post(message) }
+        guard !gone.isEmpty else { return }
+        for book in gone {
+            let urls = book.files.map { library.fileURL(for: book, file: $0) }
+            // Forget it, so putting the same file back in the folder adds the book again.
+            known.signatures.remove(Self.signature(urls))
+            ChapterScanner.shared.forget(book.id)
+            if player.book?.id == book.id { player.unload() }
+            if book.isFinished {
+                library.removeAudioKeepingRecord(book)
+            } else {
+                library.delete(book)
+            }
+        }
+        // Forget paths that are no longer in the folder, for the same reason.
+        let present = Set(scan.candidates.map(\.key))
+        known.keys = known.keys.filter { present.contains($0) }
+        saveKnown()
     }
 
     private func resolveFolder() -> URL? {
@@ -198,6 +240,7 @@ final class FolderSync: ObservableObject {
                             if isAudio(real) {
                                 try? fm.startDownloadingUbiquitousItem(at: real)
                                 result.downloading += 1
+                                result.fileNames.insert(real.lastPathComponent.lowercased())
                             }
                         }
                         continue
@@ -206,6 +249,7 @@ final class FolderSync: ObservableObject {
                         folders.append(item)
                     } else if isAudio(item) {
                         audio.append(item)
+                        result.fileNames.insert(name.lowercased())
                     }
                 }
                 return (audio.sorted(by: byName), folders.sorted(by: byName))
@@ -217,6 +261,8 @@ final class FolderSync: ObservableObject {
                 return path.hasPrefix(base) ? String(path.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")) : path
             }
 
+            // Only a folder that can be listed counts as read; otherwise nothing is removed.
+            result.readable = (try? fm.contentsOfDirectory(atPath: root.path)) != nil
             let top = contents(of: root)
             for file in top.audio {
                 result.candidates.append(Candidate(key: relative(file), files: [file], signature: signature([file])))
@@ -233,6 +279,7 @@ final class FolderSync: ObservableObject {
                 pending += inside.folders
             }
         }
+        if coordinationError != nil { result.readable = false }
         return result
     }
 

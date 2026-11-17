@@ -17,7 +17,7 @@ struct AudiobookApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                LibraryView()
+                RootView()
                 if showSplash {
                     SplashView { showSplash = false }
                         .zIndex(1)
@@ -29,17 +29,29 @@ struct AudiobookApp: App {
                 .environmentObject(router)
                 .tint(Theme.accent)
                 // Light / dark / automatic, from Settings → Appearance.
-                .onAppear { settings.applyAppearance() }
+                .onAppear {
+                    settings.applyAppearance()
+                    // One spelling per name in found chapter titles ("Bri", "Bree" → "Brie").
+                    ChapterScanner.shared.tidyChapterNames()
+                    // Chapter searches that were running when the app was closed carry on.
+                    ChapterScanner.shared.resumeInterrupted()
+                    // The Apple Watch remote.
+                    WatchBridge.shared.start()
+                }
                 .onOpenURL { url in
                     if url.isFileURL {
                         Task { await library.importOpenedFile(url) }
                     } else if url.scheme == SharedConfig.urlScheme, player.book != nil {
+                        router.tab = .library
                         router.showPlayer = true
                     }
                 }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { player.savePosition(markPlayed: player.isPlaying) }
+            if phase != .active {
+                player.savePosition(markPlayed: player.isPlaying)
+                player.refreshWidget()
+            }
             if phase == .active {
                 settings.applyAppearance()
                 Task { await FolderSync.shared.sync() }
@@ -68,4 +80,11 @@ struct AudiobookApp: App {
 final class AppRouter: ObservableObject {
     static let shared = AppRouter()
     @Published var showPlayer = false
+    /// The selected tab (Library or Activity).
+    @Published var tab: AppTab = .library
+    /// A book whose details card is shown over everything (the player's More → About This Book).
+    /// The library shows its own (with the book's menu); see `BookCard`.
+    @Published var bookCard: UUID?
+    /// Bumped by Settings → Import Audiobooks: the library opens the Files picker.
+    @Published var importRequest = 0
 }

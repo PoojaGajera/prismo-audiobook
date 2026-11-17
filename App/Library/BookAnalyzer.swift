@@ -175,6 +175,10 @@ enum BookAnalyzer {
 }
 
 enum ImageUtils {
+    /// Covers are stored up to this size (Apple's originals are usually 1,400–2,400 px tall),
+    /// so they stay sharp on the full-width player cover (~1,100 px wide on a 3× phone).
+    static let coverPixels: CGFloat = 3000
+
     static func jpegData(_ image: UIImage, maxDimension: CGFloat, quality: CGFloat = 0.85) -> Data? {
         let size = image.size
         guard size.width > 0, size.height > 0 else { return nil }

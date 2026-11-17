@@ -1,4 +1,4 @@
-# Audiobooks — an iPhone audiobook player
+# Prismo — an iPhone audiobook player
 
 A native SwiftUI audiobook player for iOS 18+ with a Home Screen / Lock Screen widget and a Control Center play/pause control.
 
@@ -45,8 +45,8 @@ A native SwiftUI audiobook player for iOS 18+ with a Home Screen / Lock Screen w
    - First time only: turn on **Settings › Privacy & Security › Developer Mode** on the iPhone.
 5. Press **Run** (⌘R).
    - First time only, on a free account: on the iPhone go to **Settings › General › VPN & Device Management** and trust your developer certificate.
-6. Add the widget: long-press the Home Screen › **Edit › Add Widget › Audiobooks**.
-   For Control Center: swipe down › **+ › Add a Control › Audiobooks**.
+6. Add the widget: long-press the Home Screen › **Edit › Add Widget › Prismo**.
+   For Control Center: swipe down › **+ › Add a Control › Prismo**.
 
 > **App Groups:** the app and the widget share playback state through an App Group (`group.<BUNDLE_ID_PREFIX>.audiobooks`). With automatic signing, Xcode registers it for you. If you see a signing error about App Groups, open **Signing & Capabilities** on each target and click the refresh/"Try Again" button.
 

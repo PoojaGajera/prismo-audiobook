@@ -1,4 +1,7 @@
 import SwiftUI
+import AVFoundation
+import AVKit
+import Combine
 
 struct PlayerView: View {
     /// Coordinate space of the now-playing panel; the artwork placeholder reports its frame in it.
@@ -29,6 +32,7 @@ struct PlayerView: View {
 
     @EnvironmentObject private var player: PlayerController
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var router: AppRouter
 
     @State private var scrubValue: Double?
     @State private var activeSheet: PlayerSheet?
@@ -39,8 +43,25 @@ struct PlayerView: View {
     @AppStorage("progressShowsBookRemaining") private var showBookRemaining = false
 
     enum PlayerSheet: String, Identifiable {
-        case chapters, bookmarks, speed, more, bookmarkSaved, settings, editDetails
+        case chapters, bookmarks, speed, more, bookmarkSaved, settings, editDetails, about
         var id: String { rawValue }
+
+        /// A full app page (as opposed to one of the player's own small sheets).
+        var isAppPage: Bool {
+            switch self {
+            case .bookmarks, .settings, .editDetails: true
+            // The chapter list wears the cover's colours, like the player (user's request).
+            case .chapters, .speed, .more, .bookmarkSaved, .about: false
+            }
+        }
+    }
+
+    /// The app's own light/dark (the open player itself is always drawn light).
+    @Environment(\.appColorScheme) private var appColorScheme
+
+    private func openBookCard() {
+        guard let id = player.book?.id else { return }
+        showBookCard(id, in: Binding(get: { router.bookCard }, set: { router.bookCard = $0 }))
     }
 
     /// The current cover's colours (background, buttons, chips, sheets).
@@ -60,12 +81,20 @@ struct PlayerView: View {
         }
         .environment(\.coverTheme, theme)
         .sheet(item: $activeSheet) { sheet in
+            // The player's own small sheets (speed, more, bookmark saved) wear the cover's colours
+            // and stay light like the player. Full app pages opened from it (chapters, bookmarks,
+            // settings, edit details) look like every other page: the app's theme and light/dark.
             sheetContent(sheet)
                 .environmentObject(player)
                 .environmentObject(settings)
                 .environment(\.coverTheme, theme)
-                .tint(theme.accent)
-                .presentationBackground(theme.sheet)
+                .environment(\.colorScheme, sheet.isAppPage ? appColorScheme : .light)
+                // The player's own sheets are light all the way down, UIKit controls included
+                // (text fields, keyboards), even under the dark theme.
+                .preferredColorScheme(sheet.isAppPage ? nil : .light)
+                .tint(sheet.isAppPage ? Theme.accent : theme.accent)
+                .presentationBackground(sheet == .bookmarks ? AnyShapeStyle(Theme.surface)
+                                        : sheet.isAppPage ? AnyShapeStyle(Theme.background) : AnyShapeStyle(theme.sheet))
                 .presentationCornerRadius(28)
         }
         .alert("Playback problem", isPresented: Binding(
@@ -88,12 +117,22 @@ struct PlayerView: View {
             if let book = player.book {
                 BookDetailsView(book: book)
             }
+        case .about:
+            EmptyView()   // shown as the book card (BookCard), not as a sheet
         // These size themselves to fit (PlayerSheetScaffold).
         case .speed:
             SpeedSheet { activeSheet = .settings }
                 .presentationDragIndicator(.visible)
         case .more:
-            MoreSheet { activeSheet = $0 }
+            MoreSheet { sheet in
+                if sheet == .about {
+                    // The book's details card, over everything (let this sheet close first).
+                    activeSheet = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openBookCard() }
+                } else {
+                    activeSheet = sheet
+                }
+            }
                 .presentationDragIndicator(.visible)
         case .bookmarkSaved:
             if let bookmark = savedBookmark {
@@ -111,7 +150,7 @@ struct PlayerView: View {
     private func content(_ book: Book) -> some View {
         VStack(spacing: 0) {
             HStack {
-                ChipIconButton(systemName: "chevron.down", label: "Close player", action: onCollapse)
+                ChipIconButton(systemName: "chevron.down", label: "Close player", glass: true, action: onCollapse)
                 Spacer()
             }
             // 12 + (44 − 36) / 2 = 16: the round button lines up with the cover's edge.
@@ -129,6 +168,13 @@ struct PlayerView: View {
                 } action: { frame in
                     onArtworkFrame(frame)
                 }
+                // Tap the cover: the book's details card.
+                .contentShape(Rectangle())
+                .onTapGesture { openBookCard() }
+                .accessibilityElement()
+                .accessibilityLabel("Cover")
+                .accessibilityHint("Shows the book's details")
+                .accessibilityAddTraits(.isButton)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.horizontal, Spacing.m)
                 .padding(.top, Spacing.s)
@@ -140,7 +186,7 @@ struct PlayerView: View {
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 MarqueeText(text: book.title, font: .title2.bold(), isActive: isActive)
                 FadedLineText(text: book.author, font: .body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // Measured inside the margins, so the travelling title lands exactly here.
@@ -181,7 +227,7 @@ struct PlayerView: View {
                     MarqueeText(text: chapter.title, font: .subheadline.weight(.semibold), isActive: isActive)
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.tertiaryText)
                 }
                 .font(.subheadline.weight(.semibold))
                 .frame(minHeight: 44)
@@ -211,7 +257,8 @@ struct PlayerView: View {
                 tint: theme.accent,
                 onEditingChanged: { editing in
                     if !editing, let value = scrubValue {
-                        player.seek(to: scopeStart + value)
+                        // Never all the way to the end: that would jump to the next chapter.
+                        player.seek(to: scopeStart + min(value, max(0, scopeDuration - 1)))
                         scrubValue = nil
                     }
                 })
@@ -231,11 +278,13 @@ struct PlayerView: View {
                 .frame(maxWidth: .infinity)
                 .accessibilityHint("Switches between time left in the chapter and in the book")
 
-                Text("-" + TimeFormat.clock(chapterRemaining))
+                // The chapter's total length (the whole book's when there are no chapters).
+                Text(TimeFormat.clock(scopeDuration))
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityLabel("Chapter length \(TimeFormat.clock(scopeDuration))")
             }
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.secondaryText)
         }
     }
 
@@ -269,7 +318,8 @@ struct PlayerView: View {
             controlButton("backward.end.fill", size: 21, label: "Previous chapter") { player.previousChapter() }
             skipButton(back: true, seconds: settings.skipBackInterval) { player.skipBackward() }
 
-            BadgePlayButton(isPlaying: player.isPlaying, size: 64, color: theme.accent) {
+            // The play button wears the app theme's colour (not the cover's), by request.
+            BadgePlayButton(isPlaying: player.isPlaying, size: 64, color: Theme.accent) {
                 player.togglePlayPause()
             }
             .frame(maxWidth: .infinity)
@@ -309,7 +359,7 @@ struct PlayerView: View {
 
     private var playerOptions: some View {
         // Fixed-width chips, grouped in the middle rather than stretched edge to edge.
-        HStack(spacing: Spacing.s) {
+        HStack(spacing: Spacing.xs) {
             optionButton(accessibilityLabel: "Playback speed, \(TimeFormat.speed(player.speed))") {
                 Text(TimeFormat.speed(player.speed))
                     .font(.subheadline.weight(.bold).monospacedDigit())
@@ -331,6 +381,8 @@ struct PlayerView: View {
                 activeSheet = .chapters
             }
 
+            AudioOutputChip()
+
             optionButton(accessibilityLabel: "More player options") {
                 Image(systemName: "ellipsis")
             } action: {
@@ -340,7 +392,7 @@ struct PlayerView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// A solid chip, 64 × 36 points to look light, with a 64 × 44-point tap area.
+    /// A glass chip, 64 × 36 points to look light, with a 64 × 44-point tap area.
     private func optionButton<Content: View>(
         accessibilityLabel: String,
         @ViewBuilder content: () -> Content,
@@ -349,13 +401,97 @@ struct PlayerView: View {
         Button(action: action) {
             content()
                 .font(.body.weight(.semibold))
-                .foregroundStyle(theme.onChip)
+                .foregroundStyle(.primary)
                 .frame(width: 64, height: 36)
-                .background(theme.chip, in: Capsule())
+                .playerGlass(in: Capsule())
                 .frame(height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
     }
+}
+
+// MARK: - Audio output (AirPlay)
+
+/// A chip that opens the system's audio output picker: AirPlay speakers and TVs, Bluetooth
+/// headphones, or the iPhone itself. Its icon is the same colour as the other chips' icons, and
+/// shows where the sound is going (AirPlay, AirPods, headphones, car). The system picker sits on
+/// top, invisible, so a tap anywhere on the chip opens it.
+private struct AudioOutputChip: View {
+    /// Looked up once when shown and on route changes, off the main thread: asking the audio
+    /// system can take a moment, and the player redraws often (every frame while it moves).
+    @State private var output: AudioOutput?
+
+    var body: some View {
+        Image(systemName: output?.symbol ?? "airplay.audio")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.primary)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 64, height: 36)
+            .playerGlass(in: Capsule())
+            .overlay { InvisibleRoutePicker() }
+            .frame(height: 44)
+            .task { output = await AudioOutput.load() }
+            .onReceive(NotificationCenter.default
+                .publisher(for: AVAudioSession.routeChangeNotification)
+                .receive(on: DispatchQueue.main)) { _ in
+                Task { output = await AudioOutput.load() }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Audio output, \(output?.name ?? "iPhone")")
+    }
+}
+
+/// Where the sound is going right now.
+private struct AudioOutput: Equatable, Sendable {
+    var symbol: String
+    var name: String
+
+    /// `current()`, worked out off the main thread.
+    static func load() async -> AudioOutput {
+        await Task.detached(priority: .utility) { AudioOutput.current() }.value
+    }
+
+    static func current() -> AudioOutput {
+        guard let port = AVAudioSession.sharedInstance().currentRoute.outputs.first else {
+            return AudioOutput(symbol: "airplay.audio", name: "iPhone")
+        }
+        switch port.portType {
+        case .airPlay:
+            return AudioOutput(symbol: "airplay.audio", name: port.portName)
+        case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
+            let isAirPods = port.portName.localizedCaseInsensitiveContains("airpods")
+            return AudioOutput(symbol: isAirPods ? "airpods" : "headphones", name: port.portName)
+        case .headphones, .usbAudio:
+            return AudioOutput(symbol: "headphones", name: port.portName)
+        case .carAudio:
+            return AudioOutput(symbol: "car.fill", name: port.portName)
+        default:
+            return AudioOutput(symbol: "airplay.audio", name: "iPhone")
+        }
+    }
+}
+
+/// The system AirPlay / audio route button, made invisible (but still tappable), so the chip's
+/// own icon shows instead of the system one.
+private struct InvisibleRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.prioritizesVideoDevices = false
+        view.tintColor = .clear
+        view.activeTintColor = .clear
+        view.backgroundColor = .clear
+        // Nearly transparent, not fully: views below 1% opacity stop receiving taps.
+        view.alpha = 0.02
+        return view
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
+extension EnvironmentValues {
+    /// The app's real light/dark, passed into the player (which forces light for itself), so
+    /// full pages opened from it can follow the app instead.
+    @Entry var appColorScheme: ColorScheme = .light
 }

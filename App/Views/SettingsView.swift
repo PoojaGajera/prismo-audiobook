@@ -1,182 +1,259 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Settings: plain rows in rounded cards, grouped under short headings. Headings and row text
+/// share the same left edge.
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var folderSync = FolderSync.shared
+    @ObservedObject private var enricher = MetadataEnricher.shared
+    @ObservedObject private var library = LibraryStore.shared
     @State private var choosingFolder = false
+    @AppStorage(LibraryView.layoutKey) private var layout = "list"
 
-    /// A section to scroll to when opening (e.g. the player's "More" button opens the playback settings).
+    /// A section to scroll to when opening (e.g. the player's "Playback Settings").
     var scrollTo: String? = nil
+    /// True on the Settings tab (no Done button; room for the tab bar). False in a sheet.
+    var embedded = false
     static let playbackSection = "playback"
 
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
-            Form {
-                folderSection
+                ScrollView {
+                    VStack(spacing: Spacing.l) {
+                        SettingsSection("Library") {
+                            pickerRow("View", selection: $layout, options: ["list", "tiles"]) {
+                                $0 == "tiles" ? "Tiles" : "List"
+                            }
+                            buttonRow(library.isImporting ? "Adding…" : "Import Audiobooks…") {
+                                // The picker opens from the library (it also asks how to group files).
+                                AppRouter.shared.tab = .library
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                    AppRouter.shared.importRequest += 1
+                                }
+                                if !embedded { dismiss() }
+                            }
+                            .disabled(library.isImporting)
+                            HStack {
+                                buttonRow("Sync Books & Details") {
+                                    Task { await LibraryView.syncAll() }
+                                }
+                                if folderSync.isSyncing || enricher.isRefreshing { ProgressView() }
+                            }
+                            .disabled(folderSync.isSyncing || enricher.isRefreshing)
+                        }
 
-                Section {
-                    Picker("Default cover edition", selection: $settings.coverRegion) {
-                        ForEach(CoverRegion.allCases) { Text($0.label).tag($0.rawValue) }
-                    }
-                } header: {
-                    Text("Book Details")
-                } footer: {
-                    Text("New books get their cover and details from this Apple Books store. To use another cover for one book, long-press it and choose Edit Details → Change Cover.")
-                }
-
-                Section {
-                    Picker("Skip back", selection: $settings.skipBackInterval) {
-                        ForEach(AppSettings.skipOptions, id: \.self) { Text("\(Int($0)) seconds").tag($0) }
-                    }
-                    Picker("Skip forward", selection: $settings.skipForwardInterval) {
-                        ForEach(AppSettings.skipOptions, id: \.self) { Text("\(Int($0)) seconds").tag($0) }
-                    }
-                } header: {
-                    Text("Skip Intervals")
+                        SettingsSection("Playback") {
+                            pickerRow("Skip back", selection: $settings.skipBackInterval,
+                                      options: AppSettings.skipOptions) { "\(Int($0)) sec" }
+                            pickerRow("Skip forward", selection: $settings.skipForwardInterval,
+                                      options: AppSettings.skipOptions) { "\(Int($0)) sec" }
+                            Toggle("Smart rewind", isOn: $settings.smartRewindEnabled)
+                            if settings.smartRewindEnabled {
+                                pickerRow("Rewind limit", selection: $settings.smartRewindLimit,
+                                          options: AppSettings.smartRewindOptions) { "\(Int($0)) sec" }
+                            }
+                        }
                         .id(Self.playbackSection)
-                } footer: {
-                    Text("Also used by the Lock Screen, headphones, CarPlay and the widget.")
-                }
 
-                Section {
-                    Toggle("Smart rewind", isOn: $settings.smartRewindEnabled)
-                    Picker("Rewind limit", selection: $settings.smartRewindLimit) {
-                        ForEach(AppSettings.smartRewindOptions, id: \.self) { Text("\(Int($0)) seconds").tag($0) }
-                    }
-                    .disabled(!settings.smartRewindEnabled)
-                } header: {
-                    Text("Smart Rewind")
-                } footer: {
-                    Text("When you resume, rewinds a little so you can pick up the thread: 3s after a short pause, up to 60s after a long break, never more than the limit.")
-                }
+                        SettingsSection("Speed") {
+                            pickerRow("Default speed", selection: $settings.defaultSpeed,
+                                      options: AppSettings.speedPresets) { TimeFormat.speed($0) }
+                            Toggle("Remember speed per book", isOn: $settings.rememberSpeedPerBook)
+                            NavigationLink {
+                                SpeedButtonsSettingsView()
+                            } label: {
+                                navigationRow("Speed buttons",
+                                              value: settings.speedButtons.map(TimeFormat.speed).joined(separator: ", "))
+                            }
+                            .buttonStyle(.plain)
+                        }
 
-                Section {
-                    Picker("Default speed", selection: $settings.defaultSpeed) {
-                        ForEach(AppSettings.speedPresets, id: \.self) { Text(TimeFormat.speed($0)).tag($0) }
-                    }
-                    Toggle("Remember speed per book", isOn: $settings.rememberSpeedPerBook)
-                    NavigationLink {
-                        SpeedButtonsSettingsView()
-                    } label: {
-                        LabeledContent("Speed buttons",
-                                       value: settings.speedButtons.map(TimeFormat.speed).joined(separator: ", "))
-                    }
-                } header: {
-                    Text("Playback Speed")
-                } footer: {
-                    Text("Speed buttons are the quick choices in the player's speed sheet.")
-                }
+                        SettingsSection("Progress") {
+                            Toggle("Chapter progress", isOn: $settings.useChapterContext)
+                            Toggle("Adjust times for speed", isOn: $settings.adjustForSpeed)
+                        }
 
-                Section {
-                    Toggle("Use chapter context", isOn: $settings.useChapterContext)
-                    Toggle("Adjust times for speed", isOn: $settings.adjustForSpeed)
-                } header: {
-                    Text("Progress")
-                } footer: {
-                    Text("Chapter context: the progress bar and Lock Screen scrubber cover the current chapter instead of the whole book. Adjust for speed: remaining times reflect your playback speed. In the player, tap the time left to switch between the chapter and the whole book.")
-                }
+                        SettingsSection("Appearance") {
+                            pickerRow("App theme", selection: $settings.playerBackground,
+                                      options: PlayerBackgroundStyle.allCases.map(\.rawValue)) {
+                                PlayerBackgroundStyle(rawValue: $0)?.label ?? $0
+                            }
+                            // (No light/dark choice: every theme is light now.)
+                            // Named after the theme's floating details (hearts, leaves, bubbles…).
+                            Toggle(Theme.current.particles.name, isOn: $settings.snowfall)
+                            if settings.snowfall {
+                                pickerRow("Amount", selection: $settings.particleCount,
+                                          options: AppSettings.particleCountOptions) {
+                                    $0 < 14 ? "A few" : ($0 < 24 ? "Some" : "Lots")
+                                }
+                                pickerRow("Speed", selection: $settings.particleSpeed,
+                                          options: AppSettings.particleSpeedOptions) {
+                                    $0 < 0.8 ? "Slow" : ($0 < 1.3 ? "Gentle" : "Lively")
+                                }
+                            }
+                            Toggle("Animations", isOn: $settings.backgroundMotionEnabled)
+                        }
 
-                Section {
-                    Picker("Theme", selection: $settings.appearance) {
-                        ForEach(AppAppearance.allCases) { Text($0.label).tag($0.rawValue) }
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                    Toggle(isOn: $settings.backgroundMotionEnabled) {
-                        Label("Shimmer & mascot animations", systemImage: "sparkles")
-                    }
-                } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text("Automatic follows your iPhone's light or dark setting. The prism glass on the opening screen drifts and shimmers, and the mascot blinks and bobs along. Everything stays still when Reduce Motion is on.")
-                }
+                        SettingsSection("Audiobooks Folder") {
+                            folderRows
+                        }
 
-                Section {
-                    Label("Home Screen & Lock Screen: long-press the Home Screen, tap Edit › Add Widget, choose Audiobooks.", systemImage: "square.grid.2x2")
-                    Label("Control Center: swipe down, tap +, Add a Control, choose Audiobooks.", systemImage: "switch.2")
-                } header: {
-                    Text("Widgets")
+                        // (Book Details → Cover store was removed at the user's request; covers use the
+                        // saved/default store, UK, via `AppSettings.coverRegion`.)
+                    }
+                    // Rebuilt when the app theme changes, so every card takes the new colours at once
+                    // (one card kept Pink smoke's white under Cosmos, with white text on it).
+                    .id(settings.playerBackground)
+                    .padding(.horizontal, Spacing.m)
+                    .padding(.top, Spacing.s)
+                    .padding(.bottom, Spacing.xl)
                 }
-                .font(.footnote)
+                .onAppear {
+                    if let scrollTo {
+                        DispatchQueue.main.async { withAnimation { proxy.scrollTo(scrollTo, anchor: .top) } }
+                    }
+                }
             }
-            .scrollContentBackground(.hidden)
-            .background(Theme.background.ignoresSafeArea())
+            // Live (moving) on the Settings tab; still when opened as a sheet.
+            .background { ThemedPageBackground(live: embedded) }
+            .safeAreaInset(edge: .bottom) { if embedded { BottomBarSpace() } }
             .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
                 if case .success(let url) = result {
                     Task { await folderSync.choose(url) }
                 }
             }
-            .onAppear {
-                if let scrollTo {
-                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(scrollTo, anchor: .top) } }
-                }
-            }
-            }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }
     }
-}
 
-extension SettingsView {
-    @ViewBuilder
-    var folderSection: some View {
-        Section {
-            if let name = folderSync.folderName {
-                HStack(spacing: 12) {
-                    Image(systemName: "folder.fill")
-                        .foregroundStyle(Theme.accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(name)
-                        Text(checkedLine)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if folderSync.isSyncing { ProgressView() }
-                }
-                Button("Check Now") {
-                    Task { await folderSync.sync(announceNothingNew: true) }
-                }
-                .disabled(folderSync.isSyncing)
-                Button("Choose a Different Folder…") { choosingFolder = true }
-                Button("Stop Watching", role: .destructive) { folderSync.stopWatching() }
-            } else {
-                Button {
-                    choosingFolder = true
-                } label: {
-                    Label("Choose Folder…", systemImage: "folder.badge.plus")
-                }
+    // MARK: - Rows
+
+    /// A title on the left and the current choice on the right (tap to pick from a menu).
+    private func pickerRow<Value: Hashable>(_ title: String, selection: Binding<Value>, options: [Value],
+                                            label: @escaping (Value) -> String) -> some View {
+        HStack {
+            Text(title)
+            Spacer(minLength: Spacing.s)
+            Picker(title, selection: selection) {
+                ForEach(options, id: \.self) { Text(label($0)).tag($0) }
             }
-        } header: {
-            Text("Audiobooks Folder")
-        } footer: {
-            Text("Pick the folder in Files where you keep your audiobooks. New books there are added whenever you open the app: each audio file is a book, and each subfolder of audio files is one book. Books already in your library, or ones you deleted here, aren't added again.")
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .tint(Theme.secondaryText)
+        }
+    }
+
+    private func navigationRow(_ title: String, value: String) -> some View {
+        HStack(spacing: Spacing.xs) {
+            Text(title)
+            Spacer(minLength: Spacing.s)
+            Text(value)
+                .foregroundStyle(Theme.secondaryText)
+                .lineLimit(1)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.tertiaryText)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func buttonRow(_ title: String, role: ButtonRole? = nil, action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            Text(title)
+                .foregroundStyle(role == .destructive ? Color.red : Theme.accent)
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var folderRows: some View {
+        if let name = folderSync.folderName {
+            HStack(spacing: Spacing.s) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                    Text(checkedLine)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+                if folderSync.isSyncing { ProgressView() }
+            }
+            .padding(.vertical, Spacing.xs)
+            // (No "Check Now": Library → Sync Books & Details checks the folder too.)
+            buttonRow("Change Folder") { choosingFolder = true }
+            buttonRow("Stop Watching", role: .destructive) { folderSync.stopWatching() }
+        } else {
+            buttonRow("Choose Folder") { choosingFolder = true }
         }
     }
 
     private var checkedLine: String {
-        guard let date = folderSync.lastChecked else { return "Checked when you open the app" }
+        guard let date = folderSync.lastChecked else { return "Not checked yet" }
         return "Checked \(date.formatted(.relative(presentation: .named)))"
     }
 }
+
+// MARK: - Section
+
+/// A short heading above a rounded card of rows, with hairlines between rows. The heading and
+/// the rows' text start at the same point.
+struct SettingsSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.secondaryText)
+                .padding(.horizontal, Spacing.m)
+                .accessibilityAddTraits(.isHeader)
+
+            VStack(spacing: 0) {
+                Group(subviews: content) { rows in
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        if index > 0 {
+                            Divider().padding(.leading, Spacing.m)
+                        }
+                        row
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                            .padding(.horizontal, Spacing.m)
+                    }
+                }
+            }
+            // The app's one card style (lit and lifted under Cosmos).
+            .glassCard(cornerRadius: 20)
+        }
+    }
+}
+
+// MARK: - Speed buttons
 
 /// Choose which quick speed buttons the player's speed sheet shows (1 to 5 of them).
 struct SpeedButtonsSettingsView: View {
     @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
-        Form {
-            Section {
+        ScrollView {
+            SettingsSection("Show in the player") {
                 ForEach(AppSettings.speedPresets, id: \.self) { speed in
                     let shown = settings.speedButtons.contains(speed)
                     let locked = shown ? settings.speedButtons.count == 1
@@ -186,7 +263,7 @@ struct SpeedButtonsSettingsView: View {
                     } label: {
                         HStack {
                             Text(TimeFormat.speed(speed))
-                                .foregroundStyle(locked ? Color.secondary : Color.primary)
+                                .foregroundStyle(locked ? Theme.secondaryText : Color.primary)
                             Spacer()
                             if shown {
                                 Image(systemName: "checkmark")
@@ -194,17 +271,19 @@ struct SpeedButtonsSettingsView: View {
                                     .foregroundStyle(Theme.accent)
                             }
                         }
+                        .frame(maxWidth: .infinity, minHeight: 48)
                         .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .disabled(locked)
                     .accessibilityAddTraits(shown ? .isSelected : [])
                 }
-            } footer: {
-                Text("Pick up to \(AppSettings.maxSpeedButtons). You can still choose any speed with the slider.")
             }
+            .padding(.horizontal, Spacing.m)
+            .padding(.top, Spacing.s)
+            .padding(.bottom, Spacing.xl)
         }
-        .scrollContentBackground(.hidden)
-        .background(Theme.background.ignoresSafeArea())
+        .background { ThemedPageBackground() }
         .navigationTitle("Speed Buttons")
         .navigationBarTitleDisplayMode(.inline)
     }

@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import NaturalLanguage
 
 // MARK: - Title cleanup
 
@@ -142,6 +143,26 @@ enum CoverRegion: String, CaseIterable, Identifiable, Sendable {
     }
     var storeName: String { "Apple Books \(label)" }
 
+    /// The Audible store for this country (Ireland uses the UK store, New Zealand the Australian).
+    var audibleDomain: String {
+        switch self {
+        case .gb, .ie: return "co.uk"
+        case .us: return "com"
+        case .ca: return "ca"
+        case .au, .nz: return "com.au"
+        case .in: return "in"
+        }
+    }
+    var audibleName: String {
+        switch self {
+        case .gb, .ie: return "Audible UK"
+        case .us: return "Audible US"
+        case .ca: return "Audible Canada"
+        case .au, .nz: return "Audible Australia"
+        case .in: return "Audible India"
+        }
+    }
+
     /// Used until the user picks another default in Settings.
     static let standard: CoverRegion = .gb
 }
@@ -149,12 +170,14 @@ enum CoverRegion: String, CaseIterable, Identifiable, Sendable {
 /// Where a lookup searches: one of the Apple Books stores, or Open Library.
 enum MetadataSource: Hashable, Identifiable, Sendable {
     case apple(CoverRegion)
+    case audible(CoverRegion)
     case openLibrary
 
     var id: String { label }
     var label: String {
         switch self {
         case .apple(let region): return region.storeName
+        case .audible(let region): return region.audibleName
         case .openLibrary: return "Open Library"
         }
     }
@@ -183,6 +206,7 @@ enum MetadataLookup {
     static func search(_ query: String, source: MetadataSource) async -> [MetadataMatch]? {
         switch source {
         case .apple(let region): return await searchApple(query, region: region)
+        case .audible(let region): return await searchAudible(query, region: region)
         case .openLibrary: return await searchOpenLibrary(query)
         }
     }
@@ -207,7 +231,7 @@ enum MetadataLookup {
             var cover: URL?
             if let art = item["artworkUrl100"] as? String {
                 // The same image is served at any size; ask for a large one.
-                cover = URL(string: art.replacingOccurrences(of: "100x100bb", with: "1200x1200bb"))
+                cover = URL(string: art.replacingOccurrences(of: "100x100bb", with: Self.appleArtworkSize))
             }
             var publisher: String?
             if let copyright = item["copyright"] as? String {
@@ -223,10 +247,85 @@ enum MetadataLookup {
                 genre: item["primaryGenreName"] as? String,
                 year: (item["releaseDate"] as? String).map { String($0.prefix(4)) },
                 publisher: publisher,
-                summary: (item["description"] as? String).map(plainText).flatMap(withoutNarration),
+                summary: (item["description"] as? String).map(plainText).flatMap(withoutNarration).flatMap(englishOnly),
                 coverURL: cover,
                 source: .apple(region))
         }
+    }
+
+    /// Audible's store search (no account needed). Audible covers are the audiobook's own square
+    /// artwork. Returns nil when the request failed, [] when nothing matched.
+    static func searchAudible(_ query: String, region: CoverRegion) async -> [MetadataMatch]? {
+        var components = URLComponents(string: "https://api.audible.\(region.audibleDomain)/1.0/catalog/products")!
+        components.queryItems = [
+            URLQueryItem(name: "keywords", value: query),
+            URLQueryItem(name: "num_results", value: "15"),
+            URLQueryItem(name: "products_sort_by", value: "Relevance"),
+            URLQueryItem(name: "response_groups", value: "contributors,media,product_attrs,product_desc,series"),
+            URLQueryItem(name: "image_sizes", value: "500,1024,2400"),
+        ]
+        guard let url = components.url, let json = await fetchJSON(url),
+              let products = json["products"] as? [[String: Any]] else { return nil }
+
+        return products.compactMap { item in
+            guard let rawTitle = item["title"] as? String else { return nil }
+            // The biggest image offered, then without its size code: Amazon serves the original.
+            var cover: URL?
+            if let images = item["product_images"] as? [String: String],
+               let biggest = images.max(by: { (Int($0.key) ?? 0) < (Int($1.key) ?? 0) })?.value {
+                cover = URL(string: biggest.replacingOccurrences(of: #"\._[A-Z]{2}\d+_(?=\.)"#, with: "",
+                                                                 options: .regularExpression))
+            }
+            let authors = (item["authors"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+            let series = (item["series"] as? [[String: Any]])?.first.flatMap { entry -> String? in
+                guard let name = entry["title"] as? String else { return nil }
+                if let number = entry["sequence"] as? String, !number.isEmpty { return "\(name), Book \(number)" }
+                return name
+            }
+            let summary = (item["merchandising_summary"] as? String ?? item["publisher_summary"] as? String)
+                .map(plainText).flatMap(withoutNarration).flatMap(englishOnly)
+            return MetadataMatch(
+                title: TitleCleaner.clean(rawTitle),
+                author: authors.isEmpty ? nil : authors.joined(separator: ", "),
+                series: series,
+                genre: nil,
+                year: (item["release_date"] as? String).map { String($0.prefix(4)) },
+                publisher: item["publisher_name"] as? String,
+                summary: summary,
+                coverURL: cover,
+                source: .audible(region),
+                edition: .audiobook)
+        }
+    }
+
+    /// Audiobook covers (Audible's, then Apple Books' audiobook art) of this exact book, from the
+    /// preferred store first. Square, and made for audiobooks. Nil only if every request failed.
+    static func audiobookCoverOptions(title: String, author: String?, preferred: CoverRegion) async -> [MetadataMatch]? {
+        let query = [TitleCleaner.searchCore(title), author].compactMap { $0 }.joined(separator: " ")
+        // One request per Audible store (several countries share one).
+        var audibleStores: [CoverRegion] = []
+        for region in [preferred] + CoverRegion.allCases where !audibleStores.contains(where: { $0.audibleDomain == region.audibleDomain }) {
+            audibleStores.append(region)
+        }
+        let appleStores = [preferred] + CoverRegion.allCases.filter { $0 != preferred }.prefix(2)
+        let sources: [MetadataSource] = audibleStores.map { .audible($0) } + appleStores.map { .apple($0) }
+
+        var results = [[MetadataMatch]?](repeating: nil, count: sources.count)
+        await withTaskGroup(of: (Int, [MetadataMatch]?).self) { group in
+            for (i, source) in sources.enumerated() {
+                group.addTask { (i, await search(query, source: source)) }
+            }
+            for await (i, result) in group { results[i] = result }
+        }
+        if results.allSatisfy({ $0 == nil }) { return nil }
+
+        var seen = Set<String>()
+        var options: [MetadataMatch] = []
+        for match in results.compactMap({ $0 }).joined()
+        where match.coverURL != nil && isSameBook(match, title: title, author: author) {
+            if seen.insert(imageKey(match.coverURL!)).inserted { options.append(match) }
+        }
+        return options
     }
 
     /// Apple Books' ebook listing: the publisher's own cover (e.g. Bloomsbury in the UK store,
@@ -254,8 +353,8 @@ enum MetadataLookup {
                 series: split.series,
                 genre: genre,
                 year: (item["releaseDate"] as? String).map { String($0.prefix(4)) },
-                summary: (item["description"] as? String).map(plainText),
-                coverURL: URL(string: art.replacingOccurrences(of: "100x100bb", with: "1200x1200bb")),
+                summary: (item["description"] as? String).map(plainText).flatMap(englishOnly),
+                coverURL: URL(string: art.replacingOccurrences(of: "100x100bb", with: Self.appleArtworkSize)),
                 source: .apple(region),
                 edition: .ebook)
         }
@@ -284,7 +383,15 @@ enum MetadataLookup {
     /// the narration or the ebook format removed.
     static func bookDescription(title: String, author: String?, fallback: String?) async -> String? {
         if let printed = await openLibraryWorkDescription(title: title, author: author) { return printed }
-        return fallback.flatMap(withoutNarration)
+        return fallback.flatMap(withoutNarration).flatMap(englishOnly)
+    }
+
+    /// The text if it's in English, else nil (some listings carry a Spanish, French… description).
+    static func englishOnly(_ text: String) -> String? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        // Short texts can be ambiguous: English only needs to be the most likely language.
+        return recognizer.dominantLanguage == .english ? text : nil
     }
 
     private static func openLibraryWorkDescription(title: String, author: String?) async -> String? {
@@ -304,7 +411,7 @@ enum MetadataLookup {
                   let workURL = URL(string: "https://openlibrary.org\(key).json"),
                   let work = await fetchJSON(workURL) else { continue }
             let raw = (work["description"] as? String) ?? ((work["description"] as? [String: Any])?["value"] as? String)
-            if let raw, let text = cleanOpenLibraryText(raw), text.count >= 60 { return text }
+            if let raw, let text = cleanOpenLibraryText(raw).flatMap(englishOnly), text.count >= 60 { return text }
         }
         return nil
     }
@@ -547,6 +654,10 @@ enum MetadataLookup {
         return covers
     }
 
+    /// Apple serves its artwork at any size up to the original; asking for 3000 px returns the
+    /// original (it doesn't upscale), which is usually 1,400–2,400 px tall.
+    static let appleArtworkSize = "3000x3000bb"
+
     static func downloadImage(_ url: URL) async -> UIImage? {
         guard let (data, response) = try? await URLSession.shared.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200,
@@ -558,7 +669,7 @@ enum MetadataLookup {
 
     private static func fetchJSON(_ url: URL) async -> [String: Any]? {
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("Audiobooks-iOS", forHTTPHeaderField: "User-Agent")
+        request.setValue("Prismo-iOS", forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]

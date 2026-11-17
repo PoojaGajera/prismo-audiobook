@@ -50,8 +50,25 @@ final class LibraryStore: ObservableObject {
 
     func update(_ book: Book) {
         guard let index = books.firstIndex(where: { $0.id == book.id }) else { return }
+        var book = book
+        // Stamp the moment a book becomes finished (Activity: books read this year).
+        if book.isFinished, !books[index].isFinished { book.finishedAt = Date() }
         books[index] = book
         save()
+    }
+
+    /// Removes a finished book's audio but keeps it in Finished as a record (cover and details
+    /// stay). Frees the space; the book can't be played any more.
+    func removeAudioKeepingRecord(_ book: Book) {
+        guard var b = self.book(id: book.id) else { return }
+        for file in b.files {
+            try? FileManager.default.removeItem(at: fileURL(for: b, file: file))
+        }
+        b.isFinished = true
+        b.audioRemoved = true
+        b.position = b.duration
+        b.bookmarks = []
+        update(b)
     }
 
     func delete(_ book: Book) {
@@ -62,9 +79,12 @@ final class LibraryStore: ObservableObject {
 
     /// Replaces a book's chapters, keeping the originals so they can be restored.
     /// Used for books that aren't loaded in the player (otherwise go through `PlayerController`).
+    /// With `onlyIfUnchaptered` (automatic scans), a book that has chapters of its own is left alone.
     @discardableResult
-    func replaceChapters(of id: UUID, with chapters: [Chapter], source: ChapterSource) -> Bool {
-        guard var b = book(id: id), b.chapterSource == .none, !chapters.isEmpty else { return false }
+    func replaceChapters(of id: UUID, with chapters: [Chapter], source: ChapterSource,
+                         onlyIfUnchaptered: Bool = true) -> Bool {
+        guard var b = book(id: id), !onlyIfUnchaptered || b.chapterSource == .none, !chapters.isEmpty
+        else { return false }
         if b.originalChapters == nil {
             b.originalChapters = b.chapters
             b.originalChapterSource = b.chapterSource
@@ -118,7 +138,7 @@ final class LibraryStore: ObservableObject {
 
     /// Writes a new cover.jpg for the book. The caller sets `hasCover` and bumps `coverVersion`.
     func writeCover(_ image: UIImage, for book: Book) -> Bool {
-        guard let jpeg = ImageUtils.jpegData(image, maxDimension: 1000) else { return false }
+        guard let jpeg = ImageUtils.jpegData(image, maxDimension: ImageUtils.coverPixels, quality: 0.9) else { return false }
         do {
             try jpeg.write(to: folderURL(for: book).appendingPathComponent("cover.jpg"), options: .atomic)
             return true
@@ -192,7 +212,8 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Imports staged files, either as one book (each file = a chapter) or one book per file.
-    /// With `announce` off, no message is shown; the caller reports the returned books.
+    /// Quiet: the new book just appears, and chapters and details are filled in in the background
+    /// (progress shows on its card). Only a complete failure is reported.
     @discardableResult
     func importStaged(_ urls: [URL], asSingleBook: Bool, announce: Bool = true) async -> [Book] {
         guard !urls.isEmpty else { return [] }
@@ -215,26 +236,8 @@ final class LibraryStore: ObservableObject {
         discardStaged(urls)
         ChapterScanner.shared.enqueue(imported)
         MetadataEnricher.shared.enqueue(imported)
-        guard announce else { return imported }
-
-        if imported.isEmpty {
-            importMessage = "Those files couldn't be read as audio."
-        } else if imported.count == 1, let book = imported.first {
-            switch book.chapterSource {
-            case .embedded:
-                importMessage = "Imported “\(TitleCleaner.clean(book.title))”. Found \(book.chapters.count) chapters in the file."
-            case .perFile:
-                importMessage = "Imported “\(TitleCleaner.clean(book.title))” with \(book.chapters.count) chapters (one per file)."
-            case .none, .detected, .interval:
-                if book.duration >= 2 * ChapterDetector.minimumGap {
-                    importMessage = "Imported “\(TitleCleaner.clean(book.title))”. It has no chapter markers, so I'm listening for chapter announcements. Keep the app open; you'll see the progress on the book's card."
-                } else {
-                    importMessage = "Imported “\(TitleCleaner.clean(book.title))”."
-                }
-            }
-        } else {
-            let chaptered = imported.filter { $0.chapterSource == .embedded }.count
-            importMessage = "Imported \(imported.count) books. \(chaptered) of them have chapter markers."
+        if announce, imported.isEmpty {
+            post("Those files couldn't be read as audio.")
         }
         return imported
     }
@@ -292,7 +295,7 @@ final class LibraryStore: ObservableObject {
 
         if let artwork = assembled.artwork,
            let image = UIImage(data: artwork),
-           let jpeg = ImageUtils.jpegData(image, maxDimension: 1000) {
+           let jpeg = ImageUtils.jpegData(image, maxDimension: ImageUtils.coverPixels, quality: 0.9) {
             do {
                 try jpeg.write(to: folder.appendingPathComponent("cover.jpg"), options: .atomic)
                 book.hasCover = true

@@ -6,9 +6,18 @@ import SwiftUI
 /// never shows a lone cover); the mini bar's controls fade out early and the full player's
 /// controls fade in late; letting go springs it open or closed (position + flick speed).
 struct NowPlayingPanel: View {
-    /// Height of the collapsed bar above the home indicator (the library reserves this space).
-    /// 20 top + 56 row + 12 + 4 progress + 12 bottom (the 4-point scale).
-    static let miniBarHeight: CGFloat = 104
+    /// Height of the mini bar: 16 + 48 thumbnail + 16 (the 4-point scale). It sits right on top of
+    /// the tab bar, full width, with rounded top corners and a slightly darker surface; its progress
+    /// line is the divider between them.
+    static let miniBarHeight: CGFloat = 80
+    /// No side margin and no gap: the mini bar is attached to the tab bar.
+    static let miniMargin: CGFloat = 0
+    static let miniGap: CGFloat = 0
+
+    /// Where the collapsed bar's top sits (pages reserve the space below it with `BottomBarSpace`).
+    static func collapsedTop(screen: CGSize, insets: EdgeInsets) -> CGFloat {
+        screen.height - insets.bottom - AppTabBar.height - miniGap - miniBarHeight
+    }
 
     @EnvironmentObject private var player: PlayerController
     @EnvironmentObject private var router: AppRouter
@@ -28,33 +37,50 @@ struct NowPlayingPanel: View {
     /// Resting title frames used to keep the title and chapter readable during the drag.
     @State private var fullTitle: CGRect = .zero
     @State private var miniTitle: CGRect = .zero
+    /// How far the open player has slid up to show the book's details under it (0 = not at all,
+    /// −`infoHeight` = all the way). Swipe up on the open player to show them.
+    @State private var infoShift: CGFloat = 0
+    /// `infoShift` when the current drag started, if the drag is moving the details (not the panel).
+    @State private var infoDragStart: CGFloat?
     var body: some View {
         if let book = player.book {
             GeometryReader { geo in
                 let insets = geo.safeAreaInsets
                 let screen = CGSize(width: geo.size.width + insets.leading + insets.trailing,
                                     height: geo.size.height + insets.top + insets.bottom)
-                let travel = max(1, screen.height - Self.miniBarHeight - insets.bottom)
+                let travel = max(1, Self.collapsedTop(screen: screen, insets: insets))
 
                 PanelChoreography(progress: progress, book: book, screen: screen, insets: insets,
                                   fullArtwork: fullArtwork,
                                   fullTitle: fullTitle,
                                   miniTitle: miniTitle,
+                                  infoShift: infoShift,
+                                  infoHeight: Self.infoHeight(screen),
+                                  onHideInfo: { setInfoShown(false, height: Self.infoHeight(screen)) },
                                   onArtworkFrame: { fullArtwork = $0 },
                                   onFullTitleFrame: { fullTitle = $0 },
                                   onMiniTitleFrame: { miniTitle = $0 },
                                   onOpen: { setOpen(true) },
                                   onCollapse: { setOpen(false) })
-                    .gesture(panelDrag(travel: travel))
+                    .gesture(panelDrag(travel: travel, infoHeight: Self.infoHeight(screen)))
                     .ignoresSafeArea()
             }
             .onAppear { progress = router.showPlayer ? 1 : 0 }
-            .onChange(of: router.showPlayer) { _, open in animate(to: open ? 1 : 0) }
+            .onChange(of: router.showPlayer) { _, open in
+                if !open { infoShift = 0 }
+                animate(to: open ? 1 : 0)
+            }
+            .onChange(of: book.id) { _, _ in infoShift = 0 }
             .onChange(of: isTouching) { _, touching in
                 guard !touching else { return }
                 // Let a normal `onEnded` run first; if the drag was cancelled instead, it never
                 // will, so settle back to wherever the panel was before the drag.
                 DispatchQueue.main.async {
+                    if let infoStart = infoDragStart {
+                        // A cancelled drag of the details: put them back where they were.
+                        infoDragStart = nil
+                        withAnimation(.snappy) { infoShift = infoStart }
+                    }
                     guard dragStart != nil else { return }
                     dragStart = nil
                     setOpen(router.showPlayer)
@@ -67,19 +93,31 @@ struct NowPlayingPanel: View {
 
     // MARK: - Gesture
 
-    private func panelDrag(travel: CGFloat) -> some Gesture {
+    private func panelDrag(travel: CGFloat, infoHeight: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .global)
             .updating($isTouching) { _, touching, _ in touching = true }
             .onChanged { drag in
-                if dragStart == nil {
+                if dragStart == nil, infoDragStart == nil {
                     // Only claim mostly-vertical drags.
                     guard abs(drag.translation.height) > abs(drag.translation.width) else { return }
+                    // (A swipe up on the open player no longer shows the book's details: they're
+                    // in the book card now. `infoShift` stays 0.)
                     dragStart = progress
+                }
+                if let infoStart = infoDragStart {
+                    infoShift = min(0, max(-infoHeight, infoStart + drag.translation.height))
+                    return
                 }
                 guard let start = dragStart else { return }
                 progress = min(1, max(0, start - drag.translation.height / travel))
             }
             .onEnded { drag in
+                if let infoStart = infoDragStart {
+                    infoDragStart = nil
+                    let projected = infoStart + drag.predictedEndTranslation.height
+                    setInfoShown(projected < -infoHeight / 2, height: infoHeight)
+                    return
+                }
                 guard let start = dragStart else { return }
                 dragStart = nil
                 // Where a flick would carry it decides, so a quick short swipe still opens/closes.
@@ -90,9 +128,22 @@ struct NowPlayingPanel: View {
             }
     }
 
+    /// How far the page slides up to show the book's details: most of the screen, leaving the top
+    /// of the player (cover) in view above them.
+    static func infoHeight(_ screen: CGSize) -> CGFloat { (screen.height * 0.74).rounded() }
+
+    /// Slides the book's details into view under the player, or back down.
+    private func setInfoShown(_ shown: Bool, height: CGFloat) {
+        if shown, progress < 1 { setOpen(true) }
+        let animation: Animation = reduceMotion ? .easeInOut(duration: 0.25) : .interpolatingSpring(duration: 0.4, bounce: 0)
+        // Not marked as panel motion: this animation should reach the sliding page.
+        withAnimation(animation) { infoShift = shown ? -height : 0 }
+    }
+
     /// Ends any drag and puts the panel straight at its resting state (no animation).
     private func snapToRest() {
         dragStart = nil
+        infoDragStart = nil
         var transaction = Transaction(animation: nil)
         transaction.isPanelMotion = true
         withTransaction(transaction) { progress = router.showPlayer ? 1 : 0 }
@@ -146,13 +197,20 @@ private struct PanelChoreography: View, Animatable {
     let fullArtwork: CGRect
     let fullTitle: CGRect
     let miniTitle: CGRect
+    /// The page slid up to show the book's details (see `NowPlayingPanel.infoShift`).
+    let infoShift: CGFloat
+    let infoHeight: CGFloat
+    let onHideInfo: () -> Void
     let onArtworkFrame: (CGRect) -> Void
     let onFullTitleFrame: (CGRect) -> Void
     let onMiniTitleFrame: (CGRect) -> Void
     let onOpen: () -> Void
     let onCollapse: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var player: PlayerController
+    /// Observed so the mini bar picks up a new app theme straight away.
+    @EnvironmentObject private var settings: AppSettings
 
     var animatableData: CGFloat {
         get { progress }
@@ -160,31 +218,42 @@ private struct PanelChoreography: View, Animatable {
     }
 
     /// The thumbnail's spot in the mini bar (matches `MiniBar`'s padding and size).
-    private static let miniArtwork = CGRect(x: 24, y: 20, width: 56, height: 56)
+    private static let miniArtwork = CGRect(x: 16, y: 16, width: 48, height: 48)
 
     var body: some View {
         let p = min(1, max(0, progress))
-        let collapsedTop = screen.height - NowPlayingPanel.miniBarHeight - insets.bottom
+        // Collapsed, the panel is a bar attached to the top of the tab bar; open, it's the whole screen.
+        let collapsedTop = NowPlayingPanel.collapsedTop(screen: screen, insets: insets)
         let panelTop = lerp(collapsedTop, 0, p)
+        let panelX = lerp(NowPlayingPanel.miniMargin, 0, p)
+        let miniWidth = screen.width - 2 * NowPlayingPanel.miniMargin
+        let panelWidth = lerp(miniWidth, screen.width, p)
+        let panelHeight = lerp(NowPlayingPanel.miniBarHeight, screen.height, p)
         // The bar's controls and progress line go quickly, before the title drops past them.
         let miniOpacity = 1 - ramp(p, 0, 0.1)
         let fullOpacity = ramp(p, 0.5, 1)
-        let corner = lerp(34, 0, ramp(p, 0.7, 1))
+        // Collapsed: rounded top corners, square bottom (it sits on the tab bar). The bottom corners
+        // round off while it travels; everything is square once it's open.
+        let squareUp = 1 - ramp(p, 0.7, 1)
+        let topCorner = 24 * squareUp
+        let bottomCorner = 28 * ramp(p, 0, 0.15) * squareUp
+        // A little darker than the tab bar while collapsed, so the two read as separate layers.
+        let shade = (colorScheme == .dark ? 0.28 : 0.05) * Double(1 - ramp(p, 0, 0.25))
+        // Collapsed it's the tab bar's colour, so the two read as one dock; it takes on the
+        // cover's colours as it opens.
+        let coverTint = Double(ramp(p, 0, 0.25))
         let art = artworkRect(p)
-        let artCorner = lerp(10, 8, p)
-        let surface = UnevenRoundedRectangle(topLeadingRadius: corner, topTrailingRadius: corner, style: .continuous)
+        let artCorner: CGFloat = 8
+        let surface = UnevenRoundedRectangle(topLeadingRadius: topCorner, bottomLeadingRadius: bottomCorner,
+                                             bottomTrailingRadius: bottomCorner, topTrailingRadius: topCorner,
+                                             style: .continuous)
         let theme = CoverPalette.theme(for: book)
         // The travelling title stands in for the real labels whenever the panel isn't fully at
         // rest. It lands exactly on them, so the swap only happens where the two are identical.
         // (Swapping at 3% / 97% made the title jump: the cover still had 3% of its way to go.)
         let titleIsTravelling = p > 0.002 && p < 0.998
-        // Where the background turns light: just above the bottom of the cover, so the title,
-        // chapter and controls sit on the light part.
-        let lightStop = fullArtwork.height > 10
-            ? min(0.9, max(0.3, (fullArtwork.maxY - 24) / max(1, screen.height)))
-            : 0.55
 
-        ZStack(alignment: .top) {
+        ZStack(alignment: .topLeading) {
             // The library dims as the player rises.
             Color.black
                 .opacity(0.45 * Double(ramp(p, 0, 1)))
@@ -192,33 +261,23 @@ private struct PanelChoreography: View, Animatable {
                 .allowsHitTesting(false)
 
             ZStack(alignment: .topLeading) {
-                // A solid surface that opens into a light, airy gradient in the cover's colours
-                // (a soft pastel at the top, almost white from the bottom of the cover down).
-                surface
-                    .fill(theme.sheet)
+                // A solid surface that opens into a drifting mesh gradient of the cover's colours
+                // (brighter pastels at the top, almost white behind the controls).
+                Rectangle()
+                    .fill(Theme.surface)
+                    .overlay { Color.black.opacity(shade) }
+                    .overlay { theme.sheet.opacity(coverTint) }
                     .overlay {
-                        LinearGradient(
-                            stops: [
-                                .init(color: theme.deep, location: 0),
-                                .init(color: theme.mid, location: lightStop * 0.55),
-                                .init(color: theme.light, location: lightStop),
-                                .init(color: theme.light, location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .opacity(Double(ramp(p, 0.1, 0.75)))
-                        .clipShape(surface)
+                        PlayerBackground(theme: theme, isActive: p > 0)
+                            .opacity(Double(ramp(p, 0.1, 0.75)))
                     }
-                    .overlay {
-                        surface.strokeBorder(Theme.hairline, lineWidth: 0.75)
-                            .opacity(Double(miniOpacity))
-                    }
-                    .shadow(color: .black.opacity(0.10 * Double(miniOpacity)), radius: 16, y: -3)
                     .frame(width: screen.width, height: screen.height)
 
+                // Everything on the page. It slides up as one (over the still background) to show
+                // the book's details under the player.
+                ZStack(alignment: .topLeading) {
                 // The one artwork that travels between the two layouts.
-                CoverView(book: book, cornerRadius: 0)
+                CoverView(book: book, cornerRadius: 0, fullSize: true)
                     .frame(width: art.width, height: art.height)
                     .clipShape(RoundedRectangle(cornerRadius: artCorner, style: .continuous))
                     .shadow(color: .black.opacity(0.14 * Double(fullOpacity)),
@@ -233,6 +292,11 @@ private struct PanelChoreography: View, Animatable {
                            onTitleFrame: onFullTitleFrame,
                            hideTitle: titleIsTravelling,
                            isActive: p >= 0.998)
+                    // The open player always looks as it does in light mode (its background is
+                    // light), so its text, icons and small sheets use light-mode colours too.
+                    // Full pages it opens follow the app (`appColorScheme`).
+                    .environment(\.appColorScheme, colorScheme)
+                    .environment(\.colorScheme, .light)
                     .padding(.top, insets.top)
                     .padding(.bottom, insets.bottom)
                     .frame(width: screen.width, height: screen.height)
@@ -245,7 +309,7 @@ private struct PanelChoreography: View, Animatable {
                         hideTitle: titleIsTravelling,
                         onTitleFrame: onMiniTitleFrame,
                         onOpen: onOpen)
-                    .frame(width: screen.width, height: NowPlayingPanel.miniBarHeight, alignment: .top)
+                    .frame(width: miniWidth, height: NowPlayingPanel.miniBarHeight, alignment: .top)
                     .opacity(Double(miniOpacity))
                     .allowsHitTesting(p < 0.03)
                     .accessibilityHidden(p > 0.5)
@@ -258,20 +322,40 @@ private struct PanelChoreography: View, Animatable {
                                     fullArt: fullArtwork,
                                     miniTitle: miniTitle,
                                     fullTitle: fullTitle)
+                        // Light-mode colours once the light background has mostly faded in
+                        // (in dark mode the bar it starts from is dark).
+                        .environment(\.colorScheme, ramp(p, 0.1, 0.75) > 0.5 ? .light : colorScheme)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
+
+                }
+                .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+                .coordinateSpace(.named(PlayerView.panelSpace))
+                .offset(y: infoShift)
             }
             .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+            // The panel's frame: a floating card when collapsed, the whole screen when open. Its
+            // contents are laid out at screen size and clipped to it.
+            .frame(width: panelWidth, height: panelHeight, alignment: .topLeading)
+            .clipShape(surface)
+            .contentShape(surface)
+            .background {
+                surface.fill(Theme.surface)
+                    .overlay { surface.fill(Color.black.opacity(shade)) }
+                    .overlay { surface.fill(theme.sheet.opacity(coverTint)) }
+                    .shadow(color: .black.opacity(0.18 * Double(miniOpacity)), radius: 14, y: -3)
+            }
             // The spring already moves everything frame by frame (this view is Animatable). Without
             // this, the text, cover and controls inside would also run their own copy of the spring
             // and lag behind: that was the stutter, and the title smearing across the cover.
             .transaction { if $0.isPanelMotion { $0.animation = nil } }
-            .coordinateSpace(.named(PlayerView.panelSpace))
-            .offset(y: panelTop)
+            .offset(x: panelX, y: panelTop)
             .environment(\.coverTheme, theme)
         }
-        .frame(width: screen.width, height: screen.height, alignment: .top)
+        .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+        // In dark mode the status bar's text is white, which can't be read on the light player.
+        .statusBarHidden(colorScheme == .dark && p > 0.5)
     }
 
     /// Thumbnail rect → full artwork rect, in the panel's coordinate space.
@@ -363,7 +447,7 @@ private struct TravellingTitle: View {
                        by: fullSubtitleScale, width: width)
                     .opacity(Double(ramp(p, 0.4, 0.65)))
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.secondaryText)
             .offset(y: subtitleTop)
         }
         .offset(x: x, y: y)
@@ -411,14 +495,15 @@ private struct MiniBar: View {
     @Environment(\.coverTheme) private var theme
 
     var body: some View {
-        VStack(spacing: Spacing.s) {
-            HStack(spacing: Spacing.m) {
+        HStack(spacing: Spacing.s) {
                 Color.clear
-                    .frame(width: 56, height: 56)
+                    .frame(width: 48, height: 48)
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    FadedLineText(text: book.title, font: .subheadline.weight(.semibold))
+                    // A long title scrolls slowly, as in the open player; it rests while the panel moves
+                    // (the travelling title stands in then).
+                    MarqueeText(text: book.title, font: .subheadline.weight(.semibold), isActive: !hideTitle)
                     FadedLineText(text: player.currentChapter?.title ?? book.author, font: .caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .onGeometryChange(for: CGRect.self) { proxy in
@@ -428,33 +513,51 @@ private struct MiniBar: View {
                 }
                 .opacity(hideTitle ? 0 : 1)
                 Button { player.skipBackward() } label: {
-                    SkipGlyph(back: true, seconds: settings.skipBackInterval, size: 24, numberSize: 8)
+                    SkipGlyph(back: true, seconds: settings.skipBackInterval, size: 22, numberSize: 7)
                         .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Skip back")
-                BadgePlayButton(isPlaying: player.isPlaying, size: 48, color: theme.accent) {
+                // The play button wears the app theme's colour (not the cover's), by request.
+                BadgePlayButton(isPlaying: player.isPlaying, size: 42, color: Theme.accent) {
                     player.togglePlayPause()
                 }
-            }
-            IridescentBar(value: book.duration > 0 ? player.currentTime / book.duration : 0, height: 4,
-                          tint: theme.accent)
         }
-        .padding(.horizontal, Spacing.l)
-        .padding(.top, 20)
-        .padding(.bottom, Spacing.s)
-        .overlay(alignment: .top) {
-            // Grabber: it can be pulled up.
-            Capsule()
-                .fill(Color.primary.opacity(0.2))
-                .frame(width: 36, height: 4)
-                .padding(.top, Spacing.xs)
+        .padding(.leading, Spacing.m)
+        // The same 16 pt margin as the cover on the left, so the play button isn't tight to the edge.
+        .padding(.trailing, Spacing.m)
+        .padding(.vertical, Spacing.m)
+        .frame(height: NowPlayingPanel.miniBarHeight)
+        .overlay(alignment: .bottom) {
+            // Progress, edge to edge along the bottom: it's also the divider above the tab bar.
+            ProgressDivider(value: book.duration > 0 ? player.currentTime / book.duration : 0,
+                            tint: theme.accent)
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(book.title)")
         .accessibilityAction(named: "Open player", onOpen)
+    }
+}
+
+/// A straight, full-width 2 pt line: the played part in `tint`, the rest a hairline. Used as the
+/// mini bar's progress and as the divider between it and the tab bar.
+private struct ProgressDivider: View {
+    var value: Double
+    var tint: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Theme.hairline
+                tint.frame(width: geo.size.width * min(1, max(0, value)))
+            }
+        }
+        .frame(height: 2)
+        .accessibilityElement()
+        .accessibilityLabel("Progress")
+        .accessibilityValue("\(Int(min(1, max(0, value)) * 100)) percent")
     }
 }

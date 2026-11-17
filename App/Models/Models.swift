@@ -57,6 +57,12 @@ struct Book: Codable, Hashable, Identifiable {
     var addedAt = Date()
     var lastPlayed: Date?
     var isFinished = false
+    /// When the book was last finished (set by `LibraryStore.update`); counts towards the
+    /// yearly reading goal and the Activity page. Nil for books finished before it existed.
+    var finishedAt: Date?
+    /// True for a finished book whose audio was removed (deleted in the app, or from the watched
+    /// folder): it stays in Finished as a record, with its cover and details, but can't be played.
+    var audioRemoved: Bool?
     var hasCover = false
     /// The chapters from before Find Chapters was used, so they can be restored.
     var originalChapters: [Chapter]?
@@ -80,6 +86,12 @@ struct Book: Codable, Hashable, Identifiable {
     var publisherCoverChecked: Bool?
     /// `MetadataEnricher.lookupVersion` of the last lookup.
     var lookupVersion: Int?
+    /// True once a genre was looked for. Books edited by hand still get a missing genre filled in
+    /// (once): the only thing the automatic lookup touches on them.
+    var genreChecked: Bool?
+
+    /// False once the audio was removed (a finished-book record only).
+    var hasAudio: Bool { audioRemoved != true }
 
     var hasKnownAuthor: Bool {
         let a = author.trimmingCharacters(in: .whitespaces)
@@ -103,6 +115,7 @@ struct Book: Codable, Hashable, Identifiable {
         b.coverOrigin = other.coverOrigin
         b.publisherCoverChecked = other.publisherCoverChecked
         b.lookupVersion = other.lookupVersion
+        b.genreChecked = other.genreChecked
         return b
     }
 

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import UIKit
+import WidgetKit
 
 /// Global settings, saved to UserDefaults.
 @MainActor
@@ -50,7 +51,32 @@ final class AppSettings: ObservableObject {
             applyAppearance(animated: true)
         }
     }
+    /// The app theme (and the open player's background). Raw value of `PlayerBackgroundStyle`.
+    @Published var playerBackground: String {
+        didSet {
+            save(playerBackground, "playerBackground")
+            Theme.current = PlayerBackgroundStyle(rawValue: playerBackground)?.themeID ?? .cloudNine
+            applyAppearance(animated: true)
+            // Repaint the Home Screen widget in the new theme.
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
     /// The prism background drifts and shimmers, and the mascot moves.
+    /// Gentle snow falling behind the app's pages (Settings → Appearance → Snowfall).
+    @Published var snowfall: Bool {
+        didSet { save(snowfall, "snowfall") }
+    }
+    /// How many of the theme's floating details are on screen (Settings → Appearance → Amount).
+    @Published var particleCount: Int {
+        didSet { save(particleCount, "particleCount") }
+    }
+    /// How fast they fall: 1 = gentle (Settings → Appearance → Speed).
+    @Published var particleSpeed: Double {
+        didSet { save(particleSpeed, "particleSpeed") }
+    }
+    static let particleCountOptions = [10, 18, 28]
+    static let particleSpeedOptions = [0.6, 1.0, 1.6]
+
     @Published var backgroundMotionEnabled: Bool {
         didSet {
             save(backgroundMotionEnabled, "backgroundMotionEnabled")
@@ -73,8 +99,13 @@ final class AppSettings: ObservableObject {
         showTotalRemaining = d.object(forKey: "showTotalRemaining") as? Bool ?? true
         adjustForSpeed = d.object(forKey: "adjustForSpeed") as? Bool ?? true
         backgroundMotionEnabled = d.object(forKey: "backgroundMotionEnabled") as? Bool ?? true
+        snowfall = d.object(forKey: "snowfall") as? Bool ?? true
+        particleCount = d.object(forKey: "particleCount") as? Int ?? 18
+        particleSpeed = d.object(forKey: "particleSpeed") as? Double ?? 1.0
         coverRegion = d.string(forKey: "coverRegion") ?? CoverRegion.standard.rawValue
         appearance = d.string(forKey: "appearance") ?? AppAppearance.system.rawValue
+        playerBackground = d.string(forKey: "playerBackground") ?? PlayerBackgroundStyle.coverColours.rawValue
+        Theme.current = PlayerBackgroundStyle(rawValue: playerBackground)?.themeID ?? .cloudNine
         // All stored properties are set; `self` can be read from here on.
         Theme.motionEnabled = backgroundMotionEnabled
         resetAlternateIcon()
@@ -91,7 +122,8 @@ final class AppSettings: ObservableObject {
 
     /// Applies the chosen appearance to every window (so sheets, alerts and system controls follow it too).
     func applyAppearance(animated: Bool = false) {
-        let style = (AppAppearance(rawValue: appearance) ?? .system).interfaceStyle
+        // Every theme is light except Firefly Night, which is dark.
+        let style: UIUserInterfaceStyle = Theme.isDark ? .dark : .light
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
             for window in scene.windows where window.overrideUserInterfaceStyle != style {
                 if animated {
@@ -119,6 +151,41 @@ final class AppSettings: ObservableObject {
     private func save(_ value: Any, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
     }
+}
+
+/// The app theme (Settings → Appearance → App theme).
+enum PlayerBackgroundStyle: String, CaseIterable, Identifiable {
+    /// The original look; the player's background is soft blobs in the book cover's colours.
+    case coverColours
+    /// Shades of pink everywhere, with slowly folding pink smoke behind the pages and player.
+    case pinkSmoke
+    /// Like Pink smoke, in purple: lavender pages and folding purple smoke. Always light.
+    case cosmos
+    /// Pale butter yellow, golden accent.
+    case lemonDrop
+    /// Soft coral, warm red-coral accent.
+    case coralReef
+    /// Creamy sage, deep matcha accent.
+    case matchaLatte
+    /// The dark theme: deep navy smoke, firefly-gold accent, glowing fireflies.
+    case fireflyNight
+
+    var id: String { rawValue }
+
+    /// The shared theme it turns on (raw values above are kept from older builds).
+    var themeID: ThemeID {
+        switch self {
+        case .coverColours: .cloudNine
+        case .pinkSmoke: .cottonCandy
+        case .cosmos: .moonberry
+        case .lemonDrop: .lemonDrop
+        case .coralReef: .coralReef
+        case .matchaLatte: .matchaLatte
+        case .fireflyNight: .fireflyNight
+        }
+    }
+
+    var label: String { themeID.name }
 }
 
 /// The app's light / dark setting.

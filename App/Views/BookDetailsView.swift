@@ -34,6 +34,7 @@ struct BookDetailsView: View {
                     field("Author", $draft.author)
                     field("Series", optional($draft.series))
                 }
+                .listRowBackground(Theme.surface)
 
                 Section("More") {
                     field("Genre", optional($draft.genre))
@@ -41,6 +42,7 @@ struct BookDetailsView: View {
                         .keyboardType(.numberPad)
                     field("Publisher", optional($draft.publisher))
                 }
+                .listRowBackground(Theme.surface)
 
                 Section("Description") {
                     // A fixed-height box that scrolls, so long descriptions can be read and edited in full.
@@ -50,13 +52,14 @@ struct BookDetailsView: View {
                         .overlay(alignment: .topLeading) {
                             if (draft.summary ?? "").isEmpty {
                                 Text("Description")
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(Theme.tertiaryText)
                                     .padding(.top, 8)
                                     .padding(.leading, 5)
                                     .allowsHitTesting(false)
                             }
                         }
                 }
+                .listRowBackground(Theme.surface)
 
                 Section {
                     Button {
@@ -67,9 +70,11 @@ struct BookDetailsView: View {
                 } footer: {
                     Text("Searches Apple Books and Open Library. You choose what to use before anything changes.")
                 }
+                .listRowBackground(Theme.surface)
             }
             .scrollContentBackground(.hidden)
-            .background(Theme.background.ignoresSafeArea())
+            .listRowSeparatorTint(Theme.hairline)
+            .background { ThemedPageBackground() }
             .navigationTitle("Edit Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -113,7 +118,7 @@ struct BookDetailsView: View {
                             .frame(width: 110, height: 110)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     } else {
-                        CoverView(book: book, cornerRadius: 14)
+                        CoverView(book: book, cornerRadius: 14, fullSize: true)
                             .frame(width: 110, height: 110)
                     }
                 }
@@ -139,6 +144,7 @@ struct BookDetailsView: View {
         } footer: {
             Text("Shows the publisher covers of every English edition of this book.")
         }
+        .listRowBackground(Theme.surface)
     }
 
     // MARK: - Helpers
@@ -154,7 +160,7 @@ struct BookDetailsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
             TextField(label, text: text, axis: .vertical)
                 .lineLimit(1...4)
         }
@@ -239,7 +245,7 @@ struct MetadataSearchView: View {
                 searchBar
                 content
             }
-            .background(Theme.background.ignoresSafeArea())
+            .background { ThemedPageBackground() }
             .navigationTitle(mode == .cover ? "Choose a Cover" : "Look Up Details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -265,7 +271,7 @@ struct MetadataSearchView: View {
 
     private var searchBar: some View {
         HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondaryText)
             TextField(mode == .cover ? "Book title" : "Title and author", text: $query)
                 .submitLabel(.search)
                 .onSubmit { Task { await runSearch() } }
@@ -285,7 +291,7 @@ struct MetadataSearchView: View {
                 ProgressView()
                 Text(mode == .cover ? "Finding every edition…" : "Searching…")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondaryText)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed:
@@ -303,8 +309,23 @@ struct MetadataSearchView: View {
 
     private var coverGrid: some View {
         ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                let audiobook = results.filter { $0.edition == .audiobook }
+                let book = results.filter { $0.edition != .audiobook }
+                if !audiobook.isEmpty { coverSection("Audiobook Covers", audiobook) }
+                if !book.isEmpty { coverSection("Book Covers", book) }
+            }
+            .padding(16)
+        }
+    }
+
+    private func coverSection(_ title: String, _ matches: [MetadataMatch]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 14)], spacing: 18) {
-                ForEach(results) { match in
+                ForEach(matches) { match in
                     Button {
                         pick(match, withCover: true, detailsToo: false)
                     } label: {
@@ -312,7 +333,7 @@ struct MetadataSearchView: View {
                             thumbnail(match, size: nil)
                             Text(editionLine(match))
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.secondaryText)
                                 .lineLimit(2)
                         }
                     }
@@ -320,7 +341,6 @@ struct MetadataSearchView: View {
                     .disabled(downloading != nil)
                 }
             }
-            .padding(16)
         }
     }
 
@@ -330,7 +350,7 @@ struct MetadataSearchView: View {
         switch match.edition {
         case .ebook: kind = "Publisher edition"
         case .print: kind = match.publisher ?? "Print edition"
-        case .audiobook: kind = "Audiobook"
+        case .audiobook: kind = match.source.label.hasPrefix("Audible") ? match.source.label : "Apple Books audiobook"
         }
         return [kind, match.year].compactMap { $0 }.joined(separator: " · ")
     }
@@ -345,11 +365,11 @@ struct MetadataSearchView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(match.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                         if let author = match.author {
-                            Text(author).font(.caption).foregroundStyle(.secondary)
+                            Text(author).font(.caption).foregroundStyle(Theme.secondaryText)
                         }
                         Text([match.genre, match.year, match.series].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.secondaryText)
                             .lineLimit(1)
                     }
                 }
@@ -370,7 +390,7 @@ struct MetadataSearchView: View {
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Rectangle().fill(Color.primary.opacity(0.06))
-                        .overlay { Image(systemName: "book.closed").foregroundStyle(.secondary) }
+                        .overlay { Image(systemName: "book.closed").foregroundStyle(Theme.secondaryText) }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -387,9 +407,16 @@ struct MetadataSearchView: View {
         guard !text.isEmpty else { return }
         state = .loading
         let preferred = CoverRegion(rawValue: settings.coverRegion) ?? .standard
-        let found = mode == .cover
-            ? await MetadataLookup.coverOptions(title: text, author: author, preferred: preferred)
-            : await MetadataLookup.detailOptions(text, preferred: preferred)
+        let found: [MetadataMatch]?
+        if mode == .cover {
+            // Audiobook covers (Audible, Apple Books) and the publisher's book covers, side by side.
+            async let audiobook = MetadataLookup.audiobookCoverOptions(title: text, author: author, preferred: preferred)
+            async let book = MetadataLookup.coverOptions(title: text, author: author, preferred: preferred)
+            let (a, b) = await (audiobook, book)
+            found = (a == nil && b == nil) ? nil : (a ?? []) + (b ?? [])
+        } else {
+            found = await MetadataLookup.detailOptions(text, preferred: preferred)
+        }
         guard text == query.trimmingCharacters(in: .whitespaces) else { return } // a newer search replaced this one
         results = found ?? []
         state = found == nil ? .failed : .loaded
@@ -400,9 +427,10 @@ struct MetadataSearchView: View {
         Task {
             var image: UIImage?
             if withCover {
-                // Audiobook art isn't used as a cover: look up the publisher's cover for that book.
+                // In Look Up Details, audiobook art isn't used as the cover: the publisher's cover
+                // for that book is looked up. In Choose a Cover, an audiobook cover is used as chosen.
                 var url = match.coverURL
-                if match.edition == .audiobook {
+                if match.edition == .audiobook, mode != .cover {
                     let region = CoverRegion(rawValue: settings.coverRegion) ?? .standard
                     url = await MetadataLookup.publisherCover(title: match.title, author: match.author, region: region)
                 }
@@ -425,9 +453,13 @@ extension MetadataMatch {
     /// A small version of the cover for lists and grids.
     var thumbnailURL: URL? {
         guard let coverURL else { return nil }
-        let text = coverURL.absoluteString
-            .replacingOccurrences(of: "1200x1200bb", with: "300x300bb")
+        var text = coverURL.absoluteString
+            .replacingOccurrences(of: MetadataLookup.appleArtworkSize, with: "300x300bb")
             .replacingOccurrences(of: "-L.jpg", with: "-M.jpg")
+        // Amazon (Audible) images: ask for a 300-pixel copy.
+        if text.contains("media-amazon.com"), text.hasSuffix(".jpg") {
+            text = String(text.dropLast(4)) + "._SL300_.jpg"
+        }
         return URL(string: text)
     }
 }

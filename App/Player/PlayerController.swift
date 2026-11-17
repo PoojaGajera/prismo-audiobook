@@ -10,7 +10,9 @@ import WidgetKit
 final class PlayerController: ObservableObject {
     static let shared = PlayerController()
 
-    @Published private(set) var book: Book?
+    @Published private(set) var book: Book? {
+        didSet { NowPlayingPresence.shared.update(hasBook: book != nil) }
+    }
     @Published private(set) var isPlaying = false
     /// Position on the book's global timeline, in seconds.
     @Published private(set) var currentTime: Double = 0
@@ -115,7 +117,7 @@ final class PlayerController: ObservableObject {
     private func restoreLastBook() {
         guard let idString = UserDefaults.standard.string(forKey: Self.lastBookKey),
               let id = UUID(uuidString: idString),
-              let saved = library.book(id: id) else { return }
+              let saved = library.book(id: id), saved.hasAudio else { return }
         load(saved, autoplay: false)
     }
 
@@ -129,6 +131,26 @@ final class PlayerController: ObservableObject {
         playing ? play() : pause()
     }
 
+    /// Starts playing and waits until audio is actually coming out (or `timeout` passes).
+    /// For widget / Control Center / Shortcuts taps: when the app wasn't running, iOS launches it
+    /// in the background just for the intent and may suspend it as soon as the intent returns.
+    /// The book still has to load and seek first, so returning straight after `play()` meant the
+    /// app was put to sleep before any sound started. Waiting here keeps it running until then.
+    func playAndWait(timeout: Double = 10) async {
+        if book == nil { restoreLastBookIfNeeded() }
+        play()
+        let deadline = Date().addingTimeInterval(timeout)
+        while isPlaying, player.timeControlStatus != .playing, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// Loads the last book again if nothing is loaded (e.g. a fresh background launch).
+    private func restoreLastBookIfNeeded() {
+        guard book == nil else { return }
+        restoreLastBook()
+    }
+
     // TEMP DEBUG: trace playback state while investigating "play after relaunch" bug.
     private func trace(_ event: String) {
         let item = player.currentItem
@@ -139,6 +161,7 @@ final class PlayerController: ObservableObject {
     func play() {
         guard var current = book else { return }
         trace("play() begin pausedAt=\(pausedAt.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "nil")")
+        holdForStartup()
         activateAudioSession()
 
         if current.isFinished || currentTime >= current.duration - 1 {
@@ -169,6 +192,7 @@ final class PlayerController: ObservableObject {
 
     func pause() {
         trace("pause()")
+        endStartupHold()
         player.pause()
         guard isPlaying else { return }
         isPlaying = false
@@ -188,22 +212,66 @@ final class PlayerController: ObservableObject {
     func nextChapter() {
         let next = currentChapterIndex + 1
         guard chapters.indices.contains(next) else { return }
-        seek(to: chapters[next].start)
+        goToChapter(next)
+    }
+
+    // MARK: Chapter memory
+
+    /// Where you were in each chapter you left part way through, per book (this session): going
+    /// back to that chapter (previous chapter, the chapter list) carries on from there instead of
+    /// its start, so an accidental skip loses nothing.
+    private var chapterPositions: [UUID: [Int: Double]] = [:]
+
+    /// Before moving away from the current chapter: remember where you were in it, unless you
+    /// were at its very beginning or end (then there's nothing to come back to).
+    private func rememberChapterPosition(leavingFor target: Double) {
+        guard let id = book?.id, let chapter = currentChapter else { return }
+        guard target < chapter.start || target >= chapter.end else { return }   // staying in it
+        let into = currentTime - chapter.start
+        if into > 10, currentTime < chapter.end - 10 {
+            chapterPositions[id, default: [:]][currentChapterIndex] = currentTime
+        } else {
+            chapterPositions[id]?[currentChapterIndex] = nil
+        }
+    }
+
+    /// Where to go when moving to chapter `index`: where you left it, or its start.
+    private func resumePoint(for index: Int) -> Double {
+        let chapter = chapters[index]
+        if let id = book?.id, let saved = chapterPositions[id]?[index], saved > chapter.start, saved < chapter.end - 5 {
+            return saved
+        }
+        return chapter.start
     }
 
     /// Goes to the start of this chapter, or the previous one if we're within 3 seconds of the start.
     func previousChapter() {
         guard let chapter = currentChapter else { seek(to: 0); return }
-        if currentTime - chapter.start > 3 || currentChapterIndex == 0 {
-            seek(to: chapter.start)
+        // Just arrived in this chapter (by previous / next / the chapter list), even if part way
+        // through it: pressing back goes on to the chapter before, not to this one's start.
+        let justArrived = arrival.map {
+            $0.index == currentChapterIndex && Date().timeIntervalSince($0.date) < 6 && abs(currentTime - $0.time) < 5
+        } ?? false
+        if currentChapterIndex > 0, justArrived || currentTime - chapter.start <= 3 {
+            goToChapter(currentChapterIndex - 1)
         } else {
-            seek(to: chapters[currentChapterIndex - 1].start)
+            seek(to: chapter.start)
         }
+    }
+
+    /// When and where the last chapter-to-chapter move landed.
+    private var arrival: (index: Int, time: Double, date: Date)?
+
+    /// Moves to chapter `index`, where you left it (or its start), and notes the arrival.
+    private func goToChapter(_ index: Int) {
+        let target = resumePoint(for: index)
+        seek(to: target)
+        arrival = (index, target, Date())
     }
 
     func jumpToChapter(_ index: Int) {
         guard chapters.indices.contains(index) else { return }
-        seek(to: chapters[index].start)
+        if index == currentChapterIndex { seek(to: chapters[index].start) } else { goToChapter(index) }
     }
 
     func setSpeed(_ newSpeed: Double) {
@@ -224,6 +292,7 @@ final class PlayerController: ObservableObject {
         guard let current = book else { return }
         let target = min(max(0, time), max(0, current.duration - 0.25))
         let location = current.location(for: target)
+        rememberChapterPosition(leavingFor: target)
         currentTime = target
         trace("seek(to: \(String(format: "%.1f", target))) track=\(location.track) local=\(String(format: "%.1f", location.local))")
 
@@ -353,7 +422,11 @@ final class PlayerController: ObservableObject {
         book = current
         library.update(current)
         lastSave = Date()
+        ListeningLog.shared.save()
     }
+
+    /// When the last time-observer tick ran (Activity measures listening time between ticks).
+    private var lastListenTick = Date()
 
     // MARK: - AVPlayer plumbing
 
@@ -453,11 +526,26 @@ final class PlayerController: ObservableObject {
         let local = time.seconds
         guard local.isFinite else { return }
 
+        let previousTime = currentTime
+        let previousChapter = currentChapterIndex
         currentTime = min(current.duration, current.files[trackIndex].start + local)
         updateChapterIndex()
 
+        // Activity: real listening time, and chapters played through to their end (not skipped).
+        let now = Date()
+        if isPlaying, player.timeControlStatus == .playing {
+            ListeningLog.shared.record(book: current, seconds: now.timeIntervalSince(lastListenTick),
+                                       speed: speed, at: now)
+            if currentChapterIndex == previousChapter + 1,
+               current.chapters.indices.contains(previousChapter),
+               previousTime >= current.chapters[previousChapter].end - 3,
+               currentTime - previousTime < 3 {
+                ListeningLog.shared.chapterFinished(book: current)
+            }
+        }
+        lastListenTick = now
+
         if isPlaying {
-            let now = Date()
             if now.timeIntervalSince(lastSave) > 5 { savePosition(); trace("tick") }
             if now.timeIntervalSince(lastSnapshot) > 20 { updateWidget(reload: false) }
         }
@@ -506,12 +594,40 @@ final class PlayerController: ObservableObject {
         }
     }
 
+    /// Makes the audio session active *before* the player starts. This has to finish first: when
+    /// playback is started from the background (Control Center, Lock Screen, headphones, widget),
+    /// iOS only lets the app keep running if its session is already active when audio starts.
+    /// (It used to be activated asynchronously, so from the background the player could start
+    /// before the session and nothing played.)
     private func activateAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Audio session activation error: \(error)")
+            trace("audio session activation FAILED: \(error.localizedDescription)")
         }
+    }
+
+    /// Keeps the app running while playback is being started from the background (the book's file
+    /// may still be loading and seeking), until audio is actually playing or 15 s have passed.
+    private var startupTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func holdForStartup() {
+        guard UIApplication.shared.applicationState != .active, startupTask == .invalid else { return }
+        startupTask = UIApplication.shared.beginBackgroundTask(withName: "Start playback") { [weak self] in
+            MainActor.assumeIsolated { self?.endStartupHold() }
+        }
+        let task = startupTask
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            if let self, self.startupTask == task { self.endStartupHold() }
+        }
+    }
+
+    private func endStartupHold() {
+        guard startupTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(startupTask)
+        startupTask = .invalid
     }
 
     private func observeNotifications() {
@@ -553,7 +669,22 @@ final class PlayerController: ObservableObject {
         }
         player.publisher(for: \.timeControlStatus)
             .receive(on: RunLoop.main)
-            .sink { [weak self] status in self?.trace("timeControlStatus -> \(status.rawValue)") }
+            .sink { [weak self] status in
+                self?.trace("timeControlStatus -> \(status.rawValue)")
+                // Audio is running: the app now stays alive on its own (background audio).
+                if status == .playing { self?.endStartupHold() }
+            }
+            .store(in: &cancellables)
+
+        // If the app is closed while playing, the Control Center button and widget would keep
+        // showing "Playing" (and a tap would send Pause). Save the real state on the way out.
+        center.publisher(for: UIApplication.willTerminateNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.closing = true
+                self?.pause()
+                self?.updateWidget(reload: true)   // tells the widget the app is closed
+            }
             .store(in: &cancellables)
     }
 
@@ -594,19 +725,30 @@ final class PlayerController: ObservableObject {
 
     // MARK: - Lock Screen / Control Center
 
+    /// Runs `work` on the main actor: right away if the command arrived on the main thread (it
+    /// normally does), so playback starts before the command returns; otherwise as soon as possible.
+    private nonisolated static func onMain(_ work: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { work() }
+        } else {
+            Task { @MainActor in work() }
+        }
+    }
+
     private func configureRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.play() }
+            guard self != nil else { return .noActionableNowPlayingItem }
+            Self.onMain { self?.play() }
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.pause() }
+            Self.onMain { self?.pause() }
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.togglePlayPause() }
+            Self.onMain { self?.togglePlayPause() }
             return .success
         }
 
@@ -691,7 +833,7 @@ final class PlayerController: ObservableObject {
             return
         }
         artwork = Self.makeArtwork(image)
-        SharedStore.saveCover(ImageUtils.jpegData(image, maxDimension: 300))
+        SharedStore.saveCover(ImageUtils.jpegData(image, maxDimension: 600))
     }
 
     /// Built outside the main actor because MediaPlayer calls the handler on a background queue.
@@ -727,13 +869,35 @@ final class PlayerController: ObservableObject {
             skipForward: settings.skipForwardInterval,
             useChapterContext: settings.useChapterContext,
             adjustForSpeed: settings.adjustForSpeed,
-            updatedAt: Date())
+            updatedAt: Date(),
+            appClosed: closing ? true : nil)
         SharedStore.saveSnapshot(snapshot)
         if reload { reloadWidgets() }
+    }
+
+    /// The app is quitting (the last snapshot says so).
+    private var closing = false
+
+    /// Saves a fresh snapshot for the widget and reloads it (e.g. when the app goes to the
+    /// background, so the widget knows it's still running).
+    func refreshWidget() {
+        updateWidget(reload: true)
     }
 
     private func reloadWidgets() {
         WidgetCenter.shared.reloadTimelines(ofKind: SharedConfig.widgetKind)
         ControlCenter.shared.reloadControls(ofKind: SharedConfig.controlKind)
+    }
+}
+
+/// Just "is a book loaded?", for views that only need that (the tab bar, the space pages keep for
+/// the dock). Observing `PlayerController` itself redraws twice a second while playing.
+@MainActor
+final class NowPlayingPresence: ObservableObject {
+    static let shared = NowPlayingPresence()
+    @Published private(set) var hasBook = false
+
+    func update(hasBook value: Bool) {
+        if hasBook != value { hasBook = value }
     }
 }
