@@ -162,7 +162,6 @@ final class PlayerController: ObservableObject {
         guard var current = book else { return }
         trace("play() begin pausedAt=\(pausedAt.map { String(format: "%.0fs ago", Date().timeIntervalSince($0)) } ?? "nil")")
         holdForStartup()
-        activateAudioSession()
 
         if current.isFinished || currentTime >= current.duration - 1 {
             current.isFinished = false
@@ -184,7 +183,10 @@ final class PlayerController: ObservableObject {
         book = current
         library.update(current)
         player.defaultRate = Float(speed)
-        startPlayerIfReady()
+        activateAudioSession { [weak self] in
+            guard let self, self.isPlaying else { return }
+            self.startPlayerIfReady()
+        }
         updateNowPlaying()
         updateWidget(reload: true)
         trace("play() end")
@@ -594,17 +596,38 @@ final class PlayerController: ObservableObject {
         }
     }
 
-    /// Makes the audio session active *before* the player starts. This has to finish first: when
-    /// playback is started from the background (Control Center, Lock Screen, headphones, widget),
-    /// iOS only lets the app keep running if its session is already active when audio starts.
-    /// (It used to be activated asynchronously, so from the background the player could start
-    /// before the session and nothing played.)
-    private func activateAudioSession() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
+    /// Activates the audio session before starting the player without blocking the main thread.
+    private func activateAudioSession(completion: @escaping @MainActor () -> Void) {
+        let session = AVAudioSession.sharedInstance()
+
+        if #available(iOS 27.0, *) {
+            session.activate(options: []) { [weak self] success, error in
+                Task { @MainActor [weak self] in
+                    self?.logAudioSessionActivationResult(success: success, error: error)
+                    completion()
+                }
+            }
+        } else {
+            Task.detached {
+                do {
+                    try session.setActive(true)
+                } catch {
+                    print("Audio session activation error: \(error)")
+                }
+
+                await MainActor.run {
+                    completion()
+                }
+            }
+        }
+    }
+
+    private func logAudioSessionActivationResult(success: Bool, error: Error?) {
+        if let error {
             print("Audio session activation error: \(error)")
             trace("audio session activation FAILED: \(error.localizedDescription)")
+        } else if !success {
+            trace("audio session activation FAILED without an error")
         }
     }
 
